@@ -114,6 +114,15 @@ const BUDGET_EVERY: Duration = Duration::from_millis(250);
 /// them.
 const REDUCTIONS_PER_SECOND: f32 = 3000.0;
 const REDUCTIONS_PER_FRAME: std::ops::RangeInclusive<usize> = 8..=512;
+/// While the 3D drawing is paused behind (texture_budget::Background): the
+/// size on screen divided by this (ten levels: every texture at its last
+/// one, those of a fixed size, HUDs and the interface, left as they are),
+/// and that many reductions a frame. On the grid the window behind still
+/// held 2 GB of textures 8 s into the pause, their size on screen decaying
+/// by half a pass, while the one in front grew by 4 GB in 10 s and lost
+/// its device (#1808).
+const PAUSED_DROPPED: f32 = 1024.0;
+const PAUSED_REDUCTIONS_PER_FRAME: usize = 8192;
 /// Firestorm asks for MAX_IMAGE_DATA_SIZE (indra/llimage/llimage.h) when it
 /// wants the whole file.
 const MAX_IMAGE_DATA_SIZE: u64 = 4096 * 4096 * 8;
@@ -166,6 +175,8 @@ pub enum TexSource {
 /// block, alpha > 32 at its first texel, repeated UVs. Top-left decoded rows
 /// are indexed from the bottom, like world UVs. No OpenGL state or
 /// readback is involved; masks are built by decode workers and retired off-thread.
+/// A second, full-resolution bit plane preserves alpha > 0 for left clicks
+/// on world Blend faces, without changing the legacy mask used by HUDs.
 pub struct PickMask {
     width: u32,
     height: u32,
@@ -180,7 +191,7 @@ impl PickMask {
 
     /// A mask read back from the transcoded cache, if its bits fit its size.
     fn from_parts((width, height, bits): texture_cache::MaskParts) -> Option<Self> {
-        let fits = width > 0 && height > 0 && bits.len() == (width as usize * height as usize).div_ceil(8);
+        let fits = width > 0 && height > 0 && Some(bits.len()) == texture_cache::pick_mask_bytes(width, height);
         fits.then_some(Self { width, height, bits })
     }
 
@@ -190,7 +201,8 @@ impl PickMask {
             return None;
         }
         let (w, h) = (width.div_ceil(2), height.div_ceil(2));
-        let mut bits = vec![0; (w as usize * h as usize).div_ceil(8)];
+        let coarse = (w as usize * h as usize).div_ceil(8);
+        let mut bits = vec![0; coarse + pixels.div_ceil(8)];
         for y in 0..h {
             for x in 0..w {
                 let row = height - 1 - y * 2;
@@ -200,15 +212,32 @@ impl PickMask {
                 }
             }
         }
-        Some(Self { width: w, height: h, bits })
+        for y in 0..height {
+            for x in 0..width {
+                if rgba[(((height - 1 - y) * width + x) as usize) * 4 + 3] != 0 {
+                    let bit = (y * width + x) as usize;
+                    bits[coarse + bit / 8] |= 1 << (bit % 8);
+                }
+            }
+        }
+        Some(Self { width, height, bits })
     }
 
     pub fn hits(&self, uv: glam::Vec2) -> bool {
+        self.hits_plane(uv, self.width.div_ceil(2), self.height.div_ceil(2), 0)
+    }
+
+    pub fn hits_nonzero(&self, uv: glam::Vec2) -> bool {
+        let coarse = (self.width.div_ceil(2) as usize * self.height.div_ceil(2) as usize).div_ceil(8);
+        self.hits_plane(uv, self.width, self.height, coarse)
+    }
+
+    fn hits_plane(&self, uv: glam::Vec2, width: u32, height: u32, offset: usize) -> bool {
         let uv = if uv.is_finite() { uv } else { glam::Vec2::ZERO };
-        let x = (uv.x.rem_euclid(1.0) * self.width as f32) as usize;
-        let y = (uv.y.rem_euclid(1.0) * self.height as f32) as usize;
-        let bit = y.min(self.height as usize - 1) * self.width as usize + x.min(self.width as usize - 1);
-        self.bits[bit / 8] & (1 << (bit % 8)) != 0
+        let x = (uv.x.rem_euclid(1.0) * width as f32) as usize;
+        let y = (uv.y.rem_euclid(1.0) * height as f32) as usize;
+        let bit = y.min(height as usize - 1) * width as usize + x.min(width as usize - 1);
+        self.bits[offset + bit / 8] & (1 << (bit % 8)) != 0
     }
 }
 
@@ -910,6 +939,11 @@ pub struct TextureStreamer {
     decodes: usize,
     /// Memory pressure step (texture_budget.rs), decided in `maintain`.
     pressure: Pressure,
+    /// The window in the background long enough to give its textures back
+    /// (texture_budget::Background), and its state (`set_window_state`).
+    background: texture_budget::Background,
+    in_front: bool,
+    minimized: bool,
     last_budget: Instant,
     /// Passes of `recompute_wants` since the step last changed.
     passes_at_step: u32,
@@ -1172,7 +1206,7 @@ impl TextureStreamer {
                 let mask = PickMask {
                     width: 1,
                     height: 1,
-                    bits: vec![0],
+                    bits: vec![0; 2],
                 };
                 (id, mask)
             })
@@ -1191,6 +1225,9 @@ impl TextureStreamer {
             max_decodes: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).max(2),
             decodes: 0,
             pressure: Pressure::new(Instant::now()),
+            background: texture_budget::Background::default(),
+            in_front: true,
+            minimized: false,
             last_budget: Instant::now(),
             passes_at_step: 0,
             reductions: Vec::new(),
@@ -1877,7 +1914,15 @@ impl TextureStreamer {
     /// lowered then loaded again as the camera sways).
     pub fn recompute_wants(&mut self) {
         let step = self.pressure.step();
-        let dropped = texture_budget::dropped(step);
+        // (the 3D drawing paused behind: nothing is drawn, every texture
+        // down to its last level at once rather than as its size on screen
+        // decays, the avatars' bakes too, texture_budget::Background::paused)
+        let paused = self.background.paused();
+        let dropped = if paused {
+            (PAUSED_DROPPED, PAUSED_DROPPED)
+        } else {
+            texture_budget::dropped(step)
+        };
         let below = texture_budget::dropped(step.saturating_sub(1));
         // the photo quality: every texture in view at full resolution, while
         // the memory allows it (under pressure the budget decides, as always)
@@ -1928,12 +1973,14 @@ impl TextureStreamer {
                 // (there it would be lowered to `keep`, or loaded up to `want`)
                 bytes_below += bytes_at(e, e.decoded.map_or(want_below, |d| d.clamp(keep_below, want_below)));
                 // (bakes and interface images are left alone, as Firestorm's
-                // boosted textures; unused ones are evicted instead)
+                // boosted textures; unused ones are evicted instead. Paused
+                // behind, the bakes go too: in a crowd they were the 1 GB of
+                // pages the window still held, and nothing is drawn)
                 if let Some(d) = e.decoded
                     && keep > d
                     && e.refs > 0
                     && !e.decoding
-                    && e.source == TexSource::Asset
+                    && (e.source == TexSource::Asset || (paused && matches!(e.source, TexSource::Bake { .. })))
                     && !ui_wanted.contains(id)
                 {
                     reductions.push((*id, keep, bytes_at(e, d)));
@@ -2857,8 +2904,11 @@ impl TextureStreamer {
     /// layer (`TextureTable::shrink`), nothing is decoded. Each is checked
     /// again, the list may be a few frames old.
     fn reduce(&mut self, renderer: &mut Renderer, frame: Duration) {
-        let most =
-            ((frame.as_secs_f32() * REDUCTIONS_PER_SECOND) as usize).clamp(*REDUCTIONS_PER_FRAME.start(), *REDUCTIONS_PER_FRAME.end());
+        let most = if self.background.paused() {
+            PAUSED_REDUCTIONS_PER_FRAME
+        } else {
+            ((frame.as_secs_f32() * REDUCTIONS_PER_SECOND) as usize).clamp(*REDUCTIONS_PER_FRAME.start(), *REDUCTIONS_PER_FRAME.end())
+        };
         let mut done = 0;
         while done < most {
             let Some((id, keep, _)) = self.reductions.pop() else {
@@ -2881,6 +2931,20 @@ impl TextureStreamer {
         }
     }
 
+    /// The window's state, each frame: whether it has the focus, whether it
+    /// is minimised (`press` gives the textures back behind,
+    /// texture_budget::Background).
+    pub fn set_window_state(&mut self, in_front: bool, minimized: bool) {
+        self.in_front = in_front;
+        self.minimized = minimized;
+    }
+
+    /// The window is behind and the viewer was past the driver's budget
+    /// there: the 3D drawing pauses (texture_budget::Background::paused).
+    pub fn drawing_paused(&self) -> bool {
+        self.background.paused()
+    }
+
     /// Memory budget, a few times a second: what the textures may hold now
     /// and the pressure step for what they hold (texture_budget.rs).
     fn press(&mut self, renderer: &mut Renderer, now: Instant, setting: u64) {
@@ -2892,6 +2956,34 @@ impl TextureStreamer {
         let video = renderer.video_memory.read(&renderer.device);
         let target = texture_budget::forced_target().unwrap_or_else(|| texture_budget::texture_target(setting, used, video));
         let before = self.pressure.step();
+        // a window behind for a minute or minimised for a second gives its
+        // textures back, at once while the memory is short, and takes up
+        // again once in front (LLViewerTexture::updateClass,
+        // texture_budget::Background)
+        let crowded = video.is_some_and(|v| v.usage > v.budget);
+        let away = self.background.update(now, self.in_front, self.minimized, crowded);
+        if away && !self.pressure.held() {
+            self.pressure.hold_max(now);
+            let place = if self.minimized { "minimised" } else { "in the background" };
+            if crowded {
+                log::info!(
+                    "texture memory: the window is {place} with the video memory short, freeing up video memory; the 3D drawing pauses until it is in front"
+                );
+            } else {
+                let after = if self.minimized {
+                    texture_budget::MINIMIZED_AFTER
+                } else {
+                    texture_budget::BACKGROUNDED_AFTER
+                };
+                log::info!(
+                    "texture memory: the window was {place} for {} s, freeing up video memory",
+                    after.as_secs()
+                );
+            }
+        } else if !away && self.pressure.held() {
+            self.pressure.release(now);
+            log::info!("texture memory: the window is in front again, textures load as before");
+        }
         // what the pages would hold one step below, from step 1 too
         // (texture_budget::below_estimate)
         let below = texture_budget::below_estimate(self.bytes_below, used, live);
@@ -2904,7 +2996,13 @@ impl TextureStreamer {
                 below,
             },
         );
-        self.to_lower = texture_budget::lowering_goal(used, live, target);
+        // (behind: everything the highest step allows, not only what brings
+        // the pages under the target)
+        self.to_lower = if self.pressure.held() {
+            u64::MAX
+        } else {
+            texture_budget::lowering_goal(used, live, target)
+        };
         if step != before {
             self.passes_at_step = 0;
             renderer.textures.set_eager_compaction(step > 0);
@@ -3378,6 +3476,27 @@ mod tests {
         assert!(!textures.pick_masks[&super::super::avatar::IMG_INVISIBLE].hits(glam::Vec2::splat(0.5)));
         assert!(!textures.pick_masks[&aurora_prim::te::WATER_EXCLUSION_TEXTURE].hits(glam::Vec2::splat(0.5)));
         assert!(is_builtin_transparent(&aurora_prim::te::WATER_EXCLUSION_TEXTURE));
+    }
+
+    #[test]
+    fn nonzero_pick_mask_preserves_each_texel_and_survives_cache_round_trip() {
+        let mut rgba = vec![255; 3 * 3 * 4];
+        for (pixel, alpha) in [(0, 0), (1, 1), (2, 32), (3, 33), (4, 0), (5, 127), (6, 255), (7, 0), (8, 1)] {
+            rgba[pixel * 4 + 3] = alpha;
+        }
+        let mask = PickMask::from_rgba(3, 3, &rgba).unwrap();
+        let (w, h, bits) = mask.parts();
+        let restored = PickMask::from_parts((w, h, bits.to_vec())).unwrap();
+        for y in 0..3 {
+            for x in 0..3 {
+                let uv = glam::Vec2::new((x as f32 + 0.5) / 3.0, (2.5 - y as f32) / 3.0);
+                let nonzero = rgba[(y * 3 + x) * 4 + 3] != 0;
+                assert_eq!(mask.hits_nonzero(uv), nonzero);
+                assert_eq!(restored.hits_nonzero(uv + glam::Vec2::new(-2.0, 3.0)), nonzero);
+                assert_eq!(restored.hits(uv), mask.hits(uv));
+            }
+        }
+        assert!(PickMask::from_parts((w, h, vec![0])).is_none());
     }
 
     fn rgba(width: u32, height: u32, levels: u32) -> ChainSize {

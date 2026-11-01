@@ -274,6 +274,25 @@ impl PickIndex {
                 .map(|(i, _)| i),
         );
     }
+    /// The objects of a radius of at least `min_radius` whose bounds come within
+    /// `range` of `center`, each with how large it looks from there (its
+    /// radius over the distance to its bounds, at least 0.5 m), for the
+    /// reverb of the surroundings. The exclusions of `segment_candidates`.
+    pub fn sphere_candidates(&self, center: Vec3, range: f32, min_radius: f32, out: &mut Vec<(usize, f32)>) {
+        out.clear();
+        for (i, e) in self.entries.iter().enumerate() {
+            if !e.pickable() || e.always || e.aside || e.radius < min_radius {
+                continue;
+            }
+            let reach = range + e.radius;
+            let d2 = e.center.distance_squared(center);
+            if d2 > reach * reach {
+                continue;
+            }
+            out.push((i, e.radius / (d2.sqrt() - e.radius).max(0.5)));
+        }
+    }
+
     /// The objects whose bounds come within `pad` of one of `segments`
     /// (at most 64), each with a bit per segment it is near (sound
     /// occlusion). Never avatars, what they wear, rigged meshes nor objects
@@ -1545,7 +1564,8 @@ mod tests {
             for z in 0..N {
                 let a = y * (N + 1) + z;
                 let b = a + N + 1;
-                indices.extend([a, b, a + 1, a + 1, b, b + 1]);
+                // Face the camera at negative X, as the visible mesh does.
+                indices.extend([a, a + 1, b, a + 1, b + 1, b]);
             }
         }
         assert!(indices.len() >= crate::scene::pick_accel::MIN_TRIANGLES * 3);

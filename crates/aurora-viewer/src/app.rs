@@ -218,6 +218,9 @@ const FLY_TIME: f32 = 0.5;
 /// Radians: a change of the viewing angle below this is not sent in AgentFOV
 /// (an eased FOV zoom creeps toward its target for ever).
 const FOV_SEND_EPSILON: f32 = 1e-3;
+/// RenderResolutionDivisor while the 3D drawing is paused behind (the 3D
+/// targets of a 3840 x 2054 window at 240 x 128; texture_budget::Background).
+const PAUSED_RESOLUTION_DIVISOR: u32 = 16;
 
 /// The wolf logo (window icon, login and loading screens, About, system
 /// notifications), read from the branding folder: one file for the viewer,
@@ -5062,17 +5065,22 @@ impl App {
         }
         let engine = self.audio_engine.as_ref();
         let sounds = &mut self.scene.sounds;
-        let fwd = (self.camera.target - self.camera.position).normalize_or(Vec3::X);
-        let listener = crate::scene::sounds::Listener {
-            pos: self.camera.position,
-            right: fwd.cross(Vec3::Z).normalize_or(Vec3::X),
-            underwater: self.camera.position.z < self.world.main_water_height(),
-        };
+        // the 3D sound for headphones (Aurora's own; off: panned)
+        let binaural = crate::scene::sounds::binaural_forced().unwrap_or(self.settings.audio.sound_hrtf);
+        let listener = crate::scene::sounds::Listener::looking(
+            self.camera.position,
+            self.camera.target - self.camera.position,
+            self.camera.position.z < self.world.main_water_height(),
+            binaural,
+        );
         let now = Instant::now();
         sounds.update(engine, &self.world, &listener, now);
         // what stands between each sound and the listener (Aurora's own)
         let occlusion = crate::scene::sound_occlusion::forced().unwrap_or(self.settings.audio.sound_occlusion);
         self.scene.update_sound_occlusion(&self.world, engine, listener.pos, occlusion, now);
+        // the reverb of the surroundings (Aurora's own)
+        let reverb = crate::scene::sound_reverb::forced().unwrap_or(self.settings.audio.sound_reverb);
+        self.scene.update_sound_reverb(&self.world, engine, listener.pos, reverb, now);
     }
 
     /// StreamTitleDisplay::checkMetadata (streamtitledisplay.cpp): the title
@@ -6179,7 +6187,7 @@ impl App {
                 let Some(picked) = self.click_pick() else {
                     return true;
                 };
-                let (_, target) = self.scene.selection_pick(
+                let (_, target) = self.scene.left_selection_pick(
                     &self.world,
                     picked.ray,
                     picked.depth,
@@ -6252,7 +6260,7 @@ impl App {
             let ray = self.build.cam.ray(x, y);
             let target = self
                 .scene
-                .edit_ray_hits(
+                .left_edit_ray_hits(
                     &self.world,
                     ray,
                     false,
@@ -6267,7 +6275,7 @@ impl App {
                 return false;
             };
             let (hit, target) = if matches!(self.build.tool, crate::build::Tool::Edit | crate::build::Tool::Grab) {
-                self.scene.selection_pick(
+                self.scene.left_selection_pick(
                     &self.world,
                     picked.ray,
                     picked.depth,
@@ -6296,7 +6304,7 @@ impl App {
         };
         // the surface under the cursor: face tool, grab surface info
         let surface = match (self.build.tool, target) {
-            (crate::build::Tool::Edit | crate::build::Tool::Grab, Some(i)) => self.scene.touch_surface(&self.world, i, ray),
+            (crate::build::Tool::Edit | crate::build::Tool::Grab, Some(i)) => self.scene.left_touch_surface(&self.world, i, ray),
             _ => None,
         };
         let used = self.build.mouse_down(
@@ -7751,6 +7759,9 @@ impl App {
             g.renderer.mark_input(Instant::now());
         }
         self.sync_minimized_mute();
+        // a window behind gives its textures back (texture_budget::Background)
+        let minimized = self.gfx.as_ref().and_then(|g| g.window.is_minimized()).unwrap_or(false);
+        self.scene.textures.set_window_state(self.focused, minimized);
         aurora_render::frame_priority::apply();
         self.world.anti_spam.configure(self.settings.anti_spam);
         self.update_rlva();
@@ -7778,6 +7789,13 @@ impl App {
             && let Some(cmd) = self.world.set_home_here()
         {
             self.send(cmd);
+        }
+        // AURORA_DEMO_APPEARANCE=take-off-folder: the inventory's Remove from
+        // current outfit on an ordinary folder (#1849)
+        if self.demo && self.frame_count == 600 && std::env::var("AURORA_DEMO_APPEARANCE").as_deref() == Ok("take-off-folder") {
+            self.apply_appearance_action(crate::world::appearance::Action::RemoveOutfit(
+                crate::world::appearance::DEMO_TAKE_OFF_FOLDER,
+            ));
         }
         // AURORA_DEMO_SIM_CONSOLE=open: the console and two commands
         if self.demo && self.frame_count == 600 && crate::demo::sim_extras::console_open() {
@@ -8230,6 +8248,14 @@ impl App {
             crate::demo::tangents::tick(&mut self.world, &mut self.scene, self.frame_count);
             crate::demo::rigged_prop::tick(&mut self.world, &mut self.scene, self.frame_count);
             if let Some(e) = crate::demo::conference::tick().and_then(|ev| self.world.apply(ev)) {
+                self.on_app_event(e);
+            }
+            // AURORA_DEMO_SOUND_HRTF: the sounds around the listener
+            if let Some(e) = crate::demo::sound_hrtf::tick(self.camera.position).and_then(|ev| self.world.apply(ev)) {
+                self.on_app_event(e);
+            }
+            // AURORA_DEMO_SOUND_REVERB: the clapper above our avatar
+            if let Some(e) = crate::demo::sound_reverb::tick(self.world.agent.position).and_then(|ev| self.world.apply(ev)) {
                 self.on_app_event(e);
             }
         }
@@ -9634,7 +9660,13 @@ impl App {
             aurora_render::ProbeFrame::default()
         };
         let mut fp = FrameParams {
-            rlva_resolution_divisor: self.world.rlva.resolution_divisor.unwrap_or(1),
+            // (a window behind past the driver's budget pauses its 3D
+            // drawing: its 3D targets shrink, texture_budget::Background)
+            rlva_resolution_divisor: if self.scene.textures.drawing_paused() {
+                PAUSED_RESOLUTION_DIVISOR
+            } else {
+                self.world.rlva.resolution_divisor.unwrap_or(1)
+            },
             rlva_overlays: self
                 .world
                 .rlva_overlay_frames(Instant::now())
@@ -10440,7 +10472,13 @@ impl App {
         // while this thread goes on with the next frame. The statistics
         // returned are those of the frame before; a frame that carries a
         // capture is waited for, its pixels are read in the tail below.
-        let lists = if self.in_world() { &self.scene.lists } else { &self.empty_lists };
+        // (nothing of the scene while the 3D drawing is paused behind,
+        // texture_budget::Background)
+        let lists = if self.in_world() && !self.scene.textures.drawing_paused() {
+            &self.scene.lists
+        } else {
+            &self.empty_lists
+        };
         let stats = if self.demo && gfx.renderer.capture_request && std::env::var_os("AURORA_DEMO_RENDER_TEXTURE").is_some() {
             gfx.renderer.render_world_texture_capture(fp, lists)
         } else {
@@ -17954,6 +17992,9 @@ impl ApplicationHandler for App {
                 if view == "broken" {
                     crate::world::appearance::seed_demo_broken(&mut self.world.inventory, self.world.agent_id);
                 }
+                if view == "take-off-folder" {
+                    crate::world::appearance::seed_demo_take_off(&mut self.world.inventory, self.world.agent_id);
+                }
                 if matches!(view.as_str(), "gallery-fit" | "gallery-fill") {
                     ui::appearance::demo_previews(&self.egui_ctx, &mut self.world.inventory, &mut self.ui_images);
                     self.settings.appearance_fill_previews = view == "gallery-fill";
@@ -17974,7 +18015,7 @@ impl ApplicationHandler for App {
                 self.appearance_ui.open(
                     match view.as_str() {
                         "outfits" | "multi-outfits" | "folders-outfits" | "folders-many-outfits" | "wearables-outfits" | "broken" => 1,
-                        "worn" | "save" | "wearables" => 2,
+                        "worn" | "multi-worn" | "save" | "wearables" | "take-off-folder" => 2,
                         _ => 0,
                     },
                     matches!(view.as_str(), "edit" | "wearables-edit") || view.starts_with("layers"),
@@ -17988,8 +18029,11 @@ impl ApplicationHandler for App {
                 if view == "duplicates" {
                     crate::world::appearance::seed_duplicate_response(&mut self.world.inventory, self.world.agent_id);
                 }
-                if matches!(view.as_str(), "menu" | "duplicates" | "broken") {
+                if matches!(view.as_str(), "menu" | "duplicates" | "broken" | "multi-items") {
                     self.appearance_ui.open_outfit(uuid::Uuid::from_u128(704));
+                }
+                if matches!(view.as_str(), "multi-items" | "multi-worn") {
+                    self.appearance_ui.demo_item_selection(&self.world.inventory, view == "multi-worn");
                 }
                 if view == "wearables-outfits" {
                     self.appearance_ui.open_outfit(uuid::Uuid::from_u128(705));
@@ -18743,12 +18787,39 @@ impl ApplicationHandler for App {
             }
             // AURORA_DEMO_SOUND_OCCLUSION=1: three looping sources, in the
             // open, behind a wall and shut in a box
+            // AURORA_DEMO_SOUND_HRTF=1|circle|updown: a sound circling the
+            // listener and one rising above it and falling (moved by
+            // `demo::sound_hrtf::tick`)
+            if crate::demo::sound_hrtf::active() {
+                self.world.agent.get_off(crate::demo::sound_hrtf::start());
+                for (id, clip) in crate::demo::sound_hrtf::sounds() {
+                    self.scene.sounds.insert(id, clip);
+                }
+                for ev in crate::demo::sound_hrtf::events() {
+                    if let Some(e) = self.world.apply(ev) {
+                        self.on_app_event(e);
+                    }
+                }
+            }
             if crate::demo::sound_occlusion::active() {
                 self.world.agent.get_off(crate::demo::sound_occlusion::start());
                 for (id, clip) in crate::demo::sound_occlusion::sounds() {
                     self.scene.sounds.insert(id, clip);
                 }
                 for ev in crate::demo::sound_occlusion::events() {
+                    if let Some(e) = self.world.apply(ev) {
+                        self.on_app_event(e);
+                    }
+                }
+            }
+            // AURORA_DEMO_SOUND_REVERB=1: a clapper above our avatar, a
+            // small room and a large hall to walk into
+            if crate::demo::sound_reverb::active() {
+                self.world.agent.get_off(crate::demo::sound_reverb::start());
+                for (id, clip) in crate::demo::sound_reverb::sounds() {
+                    self.scene.sounds.insert(id, clip);
+                }
+                for ev in crate::demo::sound_reverb::events() {
                     if let Some(e) = self.world.apply(ev) {
                         self.on_app_event(e);
                     }

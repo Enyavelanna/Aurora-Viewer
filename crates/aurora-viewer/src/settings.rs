@@ -1555,6 +1555,13 @@ pub struct AudioSettings {
     /// World sounds muffled behind walls and objects (Aurora's own, on;
     /// off: heard unobstructed, as in the Legacy Viewer).
     pub sound_occlusion: bool,
+    /// World sounds rendered binaurally, for headphones (Aurora's own,
+    /// off: on speakers it sounds wrong; off pans them, as in the Legacy
+    /// Viewer).
+    pub sound_hrtf: bool,
+    /// World sounds reverberated by the surroundings: a room, a hall, the
+    /// open air (Aurora's own, off; off: dry, as in the Legacy Viewer).
+    pub sound_reverb: bool,
     /// Interface sounds (IM, money, teleport, windows, menus, typing...;
     /// Firestorm's PlayModeUISnd* defaults).
     pub ui_sounds: bool,
@@ -1605,6 +1612,8 @@ impl Default for AudioSettings {
             collision_sounds: true,
             gesture_sounds: true,
             sound_occlusion: true,
+            sound_hrtf: false,
+            sound_reverb: false,
             ui_sounds: true,
             ui: Default::default(),
             saved_streams: Vec::new(),
