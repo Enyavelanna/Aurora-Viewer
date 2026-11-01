@@ -218,6 +218,14 @@ impl GroupMgr {
         self.groups.remove(group);
     }
 
+    /// Background consumers need members even if only titles or roles were
+    /// cached. Preserve a completed list and never restart an in-flight read.
+    pub(crate) fn ensure_members(&mut self, group: Uuid) {
+        if !group.is_nil() && self.get(&group).is_none_or(|g| !g.members_complete && g.member_request.is_none()) {
+            self.request_members(group);
+        }
+    }
+
     /// LLGroupMgr::sendCapGroupMembersRequest: a new request id marks the
     /// list pending.
     pub fn request_members(&mut self, group: Uuid) {
@@ -779,6 +787,25 @@ mod tests {
     use aurora_net::groups::LastSeen;
 
     const G: Uuid = Uuid::from_u128(1);
+
+    #[test]
+    fn background_members_load_an_incomplete_cached_group_only_once() {
+        let mut mgr = GroupMgr::default();
+        mgr.data(G).roles_complete = true;
+        mgr.ensure_members(G);
+        let pending = mgr.get(&G).unwrap().member_request;
+        assert!(pending.is_some());
+        assert!(matches!(mgr.take_commands().as_slice(), [NetCommand::GroupMembersRequest { group, .. }] if *group == G));
+        mgr.ensure_members(G);
+        assert_eq!(mgr.get(&G).unwrap().member_request, pending);
+        assert!(mgr.take_commands().is_empty());
+        let data = mgr.data(G);
+        data.member_request = None;
+        data.members_complete = true;
+        mgr.ensure_members(G);
+        mgr.ensure_members(Uuid::nil());
+        assert!(mgr.take_commands().is_empty());
+    }
 
     fn member(id: u128, online: bool) -> GroupMember {
         GroupMember {

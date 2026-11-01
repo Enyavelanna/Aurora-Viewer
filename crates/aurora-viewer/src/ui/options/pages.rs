@@ -7,6 +7,7 @@ pub mod aurora;
 pub mod avatars;
 pub mod camera;
 pub mod chat;
+pub mod combat;
 pub mod commands;
 pub mod confirmations;
 pub mod controls;
@@ -51,6 +52,15 @@ pub fn tabs(page: Page) -> Vec<&'static str> {
             aurora_i18n::tr!("common-mouselook"),
         ],
         Page::Controls => vec![aurora_i18n::tr!("ui-options-page-controls"), aurora_i18n::tr!("joystick-title")],
+        Page::Combat => vec![
+            aurora_i18n::tr!("monitor-tab-overview"),
+            aurora_i18n::tr!("combat-settings"),
+            aurora_i18n::tr!("combat-rewards"),
+            aurora_i18n::tr!("tactical-title"),
+            aurora_i18n::tr!("tactical-markers"),
+            aurora_i18n::tr!("tactical-pings"),
+            aurora_i18n::tr!("tactical-sharing"),
+        ],
         Page::Avatars => vec![
             aurora_i18n::tr!("ui-options-tab-name-tags"),
             aurora_i18n::tr!("ui-options-names"),
@@ -94,6 +104,7 @@ pub fn draw(cx: &mut Cx, page: Page, tab: usize) {
         Page::Camera => camera::page(cx, tab),
         Page::Avatars => avatars::page(cx, tab),
         Page::Chat => chat::page(cx, tab),
+        Page::Combat => combat::page(cx, tab),
         Page::Sound => sound::page(cx, tab),
         Page::Media => media::page(cx),
         Page::Privacy => privacy::page(cx),

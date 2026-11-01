@@ -635,6 +635,61 @@ fn every_page_names_its_tabs() {
     );
 }
 
+#[test]
+fn combat_preferences_are_hidden_and_reset_without_erasing_annotations() {
+    let paths = collected();
+    for path in [
+        "combat.journal",
+        "combat.killmarker",
+        "combat.voices",
+        "combat.kill_sound",
+        "combat.feed",
+        "maps.tactical.enabled",
+        "maps.tactical.recipients",
+    ] {
+        assert!(!paths.iter().any(|(page, name)| *page == Page::Combat && name == path));
+        assert!(
+            !paths.iter().any(|(page, name)| *page == Page::Chat && name == path),
+            "combat controls do not belong to Chat"
+        );
+    }
+    assert!(!Page::ALL.contains(&Page::Combat));
+    assert_eq!(Page::Fun.section(), Some(aurora_i18n::tr!("ui-options-section-extras")));
+    assert_eq!(Page::Combat.section(), None, "inherits the Extras section");
+    let mut s = Settings::default();
+    s.combat.journal = true;
+    s.combat.voices = true;
+    s.maps.tactical.enabled = true;
+    s.maps.tactical.pings_enabled = true;
+    s.maps.tactical.add_marker([100.0, 200.0, 30.0]);
+    s.maps.tactical.ping([101.0, 201.0, 30.0], 1);
+    let markers = s.maps.tactical.markers.clone();
+    let pings = s.maps.tactical.pings.clone();
+    let combat = s.combat.clone();
+    reset_page_settings(Page::Combat, &mut s);
+    assert_eq!(s.combat, combat, "hidden Combat settings are not reset by Preferences");
+    assert!(s.maps.tactical.enabled && s.maps.tactical.pings_enabled);
+    assert_eq!(s.maps.tactical.markers, markers);
+    assert_eq!(s.maps.tactical.pings, pings);
+}
+
+#[test]
+fn tactical_preferences_keep_the_controls_visible_and_stack_them_vertically() {
+    let mut frames = Frames::new();
+    let (mut s, mut st, mut r) = (Settings::default(), OptionsUi::default(), OptionsResult::default());
+    let mut texts = Vec::new();
+    for _ in 0..5 {
+        texts = page_frame(&mut frames, &mut s, &mut st, &mut r, Page::Combat, 5, Vec::new());
+    }
+    let pings = texts
+        .iter()
+        .find(|t| t.source == aurora_i18n::tr!("tactical-pings"))
+        .expect("ping toggle")
+        .rect;
+    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 900.0));
+    assert!(viewport.contains_rect(pings), "controls must appear in the visible pane: {pings:?}");
+}
+
 /// One frame of the rows of a page's tab, `width` wide, laid out as in the
 /// window; the window's state and result are kept between frames.
 fn page_frame(

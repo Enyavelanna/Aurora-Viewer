@@ -112,6 +112,7 @@ impl CursorHold {
 pub(super) struct AltCursor {
     free: bool,
     left: bool,
+    wheel: bool,
 }
 
 /// What the cursor must do after `AltCursor::update`.
@@ -124,6 +125,19 @@ pub(super) enum AltSwitch {
 }
 
 impl AltCursor {
+    fn update_ping(&mut self, mouselook: bool, alt: bool, wheel: bool) -> Option<AltSwitch> {
+        let transition = wheel || self.wheel;
+        self.wheel = wheel;
+        if transition {
+            let left = self.left;
+            self.left = false;
+            let result = self.update(mouselook, alt || wheel);
+            self.left = left;
+            result
+        } else {
+            self.update(mouselook, alt)
+        }
+    }
     /// Alt frees the cursor: the view no longer follows the mouse, a click
     /// lands under the cursor and not at the crosshair.
     pub(super) fn free(&self) -> bool {
@@ -159,10 +173,26 @@ impl App {
         // (AURORA_DEMO_CAMERA scripts the keys: the window needs no focus)
         let focused = self.focused || self.demo && std::env::var_os("AURORA_DEMO_CAMERA").is_some();
         let mouselook = self.camera.mouselook() && focused && !self.exit_prompt.open;
-        match self.alt_cursor.update(mouselook, self.alt && !self.alt_gr_alone()) {
+        let ping_wheel = self
+            .tactical_press
+            .is_some_and(|press| press.wheel(self.settings.maps.tactical.hold_ms));
+        let opening = ping_wheel && !self.alt_cursor.wheel;
+        match self.alt_cursor.update_ping(mouselook, self.alt && !self.alt_gr_alone(), ping_wheel) {
             Some(AltSwitch::Free) => self.release_cursor(false),
             Some(AltSwitch::Take) => self.set_mouselook_grab(true),
             None => {}
+        }
+        if opening
+            && !self.camera.mouselook()
+            && let Some(press) = self.tactical_press
+        {
+            // A wheel near the window edge is shifted inward. Start its cursor
+            // in the dead zone too, rather than selecting a sector by accident.
+            let ppp = self.egui_ctx.pixels_per_point();
+            self.move_cursor((press.center.x * ppp, press.center.y * ppp));
+            if let Some(g) = &mut self.gfx {
+                g.egui_state.egui_input_mut().events.push(egui::Event::PointerMoved(press.center));
+            }
         }
     }
 
@@ -354,6 +384,25 @@ mod tests {
         // Alt outside mouselook is the camera's, not this
         assert_eq!(alt.update(false, true), None);
         assert!(!alt.free());
+    }
+
+    #[test]
+    fn ping_wheel_frees_and_restores_cursor_even_during_a_held_click() {
+        let mut alt = AltCursor::default();
+        alt.left_button(true);
+        assert_eq!(alt.update_ping(true, false, true), Some(AltSwitch::Free));
+        assert_eq!(alt.update_ping(true, false, true), None);
+        assert!(alt.free());
+        assert_eq!(alt.update_ping(true, false, false), Some(AltSwitch::Take));
+        assert!(!alt.free());
+        assert_eq!(alt.update_ping(true, false, true), Some(AltSwitch::Free));
+        assert_eq!(alt.update_ping(false, false, false), None);
+        assert!(!alt.free());
+        assert_eq!(alt.update_ping(true, true, true), Some(AltSwitch::Free));
+        assert_eq!(alt.update_ping(true, true, false), None);
+        assert!(alt.free());
+        alt.left_button(false);
+        assert_eq!(alt.update_ping(true, false, false), Some(AltSwitch::Take));
     }
 
     #[test]

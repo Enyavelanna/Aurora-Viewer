@@ -100,6 +100,8 @@ impl Demo {
                 } else {
                     Ok(match query {
                         Query::Pose { .. } => Reply::Pose,
+                        Query::Combat(_) => Reply::Combat,
+                        Query::Tactical { .. } => Reply::Tactical,
                         Query::Portal { .. } => Reply::Portal,
                         Query::Altitudes(ids) => Reply::Altitudes(
                             ids.iter()

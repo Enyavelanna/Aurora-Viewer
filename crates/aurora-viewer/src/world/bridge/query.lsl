@@ -1,10 +1,10 @@
-// Aurora LSL Bridge query and posing-consent services v1.40: the Legacy Viewer's getZOffsets
+// Aurora LSL Bridge query and posing-consent services v1.42: the Legacy Viewer's getZOffsets
 // and getScriptInfo equivalents (fsradar.cpp, fs_resources/EBEDD1D2-*.lsltxt,
 // originally LGPL 2.1). A separate script beside the movement controller:
 // Mono gives each script its own 64 KB, and a query can never halt Movelock.
 // It has its own HTTP-in URL and token, and never touches physics.
 string FOLDER = "__FOLDER__";
-string VERSION = "1.40";
+string VERSION = "1.42";
 string gURL;
 key gToken;
 key gURLRequest;
@@ -18,6 +18,12 @@ list gPortalPeers;
 integer POSE_CHANNEL = -184735220;
 list gPosePeers;
 integer gPaired;
+integer gCombatListener;
+float gCombatUntil;
+key gCombatEpoch;
+integer gCombatSequence;
+integer gTacticalListener;
+integer TACTICAL_CHANNEL = -184735225;
 float gNextHello;
 
 // Keys have a validity test in conditions; LSL's ! operator requires an integer.
@@ -37,6 +43,13 @@ requestURL() {
     gURLRequest = llRequestSecureURL();
 }
 initialize() {
+    llListenRemove(gTacticalListener);
+    gTacticalListener = llListen(TACTICAL_CHANNEL, "", NULL_KEY, "");
+    llListenRemove(gCombatListener);
+    gCombatListener = 0;
+    gCombatUntil = 0.0;
+    gCombatEpoch = llGenerateKey();
+    gCombatSequence = 0;
     gPaired = FALSE;
     gNextHello = 0.0;
     gOwner = llGetOwner();
@@ -52,7 +65,26 @@ initialize() {
     requestURL();
 }
 query(key request, string kind, string targets) {
-    if (kind == "portal") {
+    if (kind == "tactical") {
+        integer split=llSubStringIndex(targets,";");
+        list recipients=llCSV2List(llGetSubString(targets,0,split-1));
+        string payload=llDeleteSubString(targets,0,split);
+        integer n=llGetListLength(recipients);
+        if (split<36 || n<1 || n>16 || llStringLength(payload)>640) {llHTTPResponse(request,400,"invalid"); return;}
+        integer i;
+        for(i=0;i<n;++i) {
+            key target=llList2Key(recipients,i);
+            if(!validKey(target) || target==gOwner) {llHTTPResponse(request,400,"invalid"); return;}
+        }
+        for(i=0;i<n;++i) llRegionSayTo(llList2Key(recipients,i),TACTICAL_CHANNEL,"tactical2|"+payload);
+        llHTTPResponse(request,200,"[]");
+    } else if (kind == "combat") {
+        if (targets != "0" && targets != "1") { llHTTPResponse(request, 400, "invalid"); return; }
+        gCombatUntil = llGetTime() + 30.0;
+        if (targets == "1" && !gCombatListener) gCombatListener = llListen(COMBAT_CHANNEL, "", COMBAT_LOG_ID, "");
+        if (targets == "0") { llListenRemove(gCombatListener); gCombatListener = 0; }
+        llHTTPResponse(request, 200, "[]");
+    } else if (kind == "portal") {
         // The viewer validates the typed, base64 invitation. The script only
         // authenticates its sender and relays bounded region-local data.
         key target = (key)llGetSubString(targets, 0, 35);
@@ -131,6 +163,27 @@ query(key request, string kind, string targets) {
     } else llHTTPResponse(request, 400, "invalid");
 }
 
+// Compact official fields first; never wait for object/name enrichment.
+// Reference: https://wiki.secondlife.com/wiki/Combat_Log (JSON event schema).
+relayDeath(string report) {
+    key victim = (key)llJsonGetValue(report, ["target"]);
+    if (!validKey(victim)) return;
+    if (gCombatSequence == 2147483647) { gCombatEpoch = llGenerateKey(); gCombatSequence = 0; }
+    gCombatSequence += 1;
+    string record = llList2Json(JSON_OBJECT, [
+        "event", "DEATH", "target", (string)victim,
+        "owner", (string)((key)llJsonGetValue(report, ["owner"])),
+        "source", (string)((key)llJsonGetValue(report, ["source"])),
+        "rezzer", (string)((key)llJsonGetValue(report, ["rezzer"]))
+    ]);
+    string damageType = llJsonGetValue(report, ["type"]);
+    if (damageType != JSON_INVALID) record = llJsonSetValue(record, ["type"], damageType);
+    string envelope = llList2Json(JSON_OBJECT, ["v", 2, "epoch", (string)gCombatEpoch, "seq", gCombatSequence]);
+    envelope = llJsonSetValue(envelope, ["report"], record);
+    envelope = llJsonSetValue(envelope, ["avatar"], JSON_TRUE);
+    if (llStringLength(envelope) <= 900)
+        llOwnerSay("<auroraCombat>" + envelope + "</auroraCombat>");
+}
 default {
     // Login restores script globals before attach; revoke old pairing at once.
     on_rez(integer start) { gPaired = FALSE; }
@@ -162,6 +215,30 @@ default {
         }
     }
     listen(integer channel, string name, key sender, string message) {
+        if (channel==TACTICAL_CHANNEL) {
+            if (!gPaired || !llGetAttached() || llStringLength(message)>650 || llGetSubString(message,0,9)!="tactical2|") return;
+            key peer=llGetOwnerKey(sender);
+            if (!validKey(peer) || peer==sender || peer==gOwner) return;
+            if (llList2Integer(llGetObjectDetails(sender,[OBJECT_ATTACHED_POINT]),0)<=0) return;
+            llOwnerSay("<auroraTactical>"+(string)peer+"|"+llDeleteSubString(message,0,9)+"</auroraTactical>");
+            return;
+        }
+        if (channel == COMBAT_CHANNEL) {
+            if (!gPaired || !llGetAttached() || sender != COMBAT_LOG_ID || llGetTime() > gCombatUntil) {
+                llListenRemove(gCombatListener); gCombatListener = 0; return;
+            }
+            // Only official deaths are relayed. Damage has no effect in AuroraC2.
+            list records;
+            if (llJsonValueType(message, []) == JSON_ARRAY) records = llJson2List(message);
+            else records = [message];
+            integer cursor;
+            integer total = llGetListLength(records);
+            for (cursor = 0; cursor < total; cursor += 1) {
+                string record = llList2String(records, cursor);
+                if (llJsonGetValue(record, ["event"]) == "DEATH") relayDeath(record);
+            }
+            return;
+        }
         if (channel == PORTAL_CHANNEL) {
             if (!llGetAttached() || !gPaired || llStringLength(message) > 648
                 || llGetSubString(message, 0, 7) != "portal2|") return;

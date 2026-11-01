@@ -18,7 +18,7 @@ const OLD_SUBFOLDER: &str = "Bridge";
 pub const NAME: &str = "#Aurora Bridge v1.0";
 // Stable inventory/script names let upgrades replace the existing controller
 // instead of wearing two bridges with competing physics.
-const VERSION: &str = "1.40";
+const VERSION: &str = "1.42";
 const DISCOVERY_CHANNEL: i32 = -184735219;
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
 const ROCK: &str = "Rock - medium, round";
@@ -229,6 +229,10 @@ pub struct Bridge {
     memory_low: Option<u32>,
     pub error: Option<String>,
     pub commands: Vec<NetCommand>,
+    /// Validated Combat 2.0 reports from the current worn bridge. They never
+    /// reach the nearby-chat transcript as raw object protocol.
+    combat_events: crate::combat::wire::Inbox,
+    pub(crate) tactical_events: Vec<(Uuid, String)>,
 }
 
 impl Bridge {
@@ -260,6 +264,17 @@ impl Bridge {
     pub fn query_endpoint(&self) -> Option<Endpoint> {
         self.available().then(|| self.query.clone()).flatten()
     }
+    /// Drain reports received since the application last handled network events.
+    pub fn take_combat_events(&mut self) -> Vec<crate::combat::Event> {
+        self.combat_events.drain()
+    }
+    pub fn take_combat_loss(&mut self) -> u64 {
+        self.combat_events.take_loss()
+    }
+    pub fn clear_combat(&mut self) {
+        self.combat_events = Default::default();
+    }
+
     /// Why the query service (posing requests, script information) is or is
     /// not usable, so a waiting button can say what is wrong. A worn bridge
     /// whose query script stays silent past SILENCE_CHECK (it stopped, or did
@@ -1214,6 +1229,8 @@ impl Bridge {
                         "<auroraPose>",
                         "<auroraPortal>",
                         "<auroraMoveLock>",
+                        "<auroraCombat>",
+                        "<auroraTactical>",
                         "<auroraBridgeError>",
                         "<auroraBridgeStatus>",
                     ]
@@ -1238,6 +1255,35 @@ impl Bridge {
                             Err(_) => {}
                         }
                     } else if chat.source_id == self.object {
+                        if self.available()
+                            && chat.message.starts_with("<auroraTactical>")
+                            && world
+                                .worn_attachment(&self.item)
+                                .and_then(|i| world.objects.get(i))
+                                .is_some_and(|o| o.full_id == chat.source_id && Some(o.key.region) == world.main_region)
+                            && let Some(body) = chat
+                                .message
+                                .strip_prefix("<auroraTactical>")
+                                .and_then(|s| s.strip_suffix("</auroraTactical>"))
+                            && let Some((sender, payload)) = body.split_once('|')
+                            && let Ok(sender) = Uuid::parse_str(sender)
+                            && self.tactical_events.len() < 32
+                        {
+                            self.tactical_events.push((sender, payload.to_owned()));
+                        }
+                        if chat.message.starts_with("<auroraCombat>")
+                            && self.available()
+                            && world
+                                .worn_attachment(&self.item)
+                                .and_then(|i| world.objects.get(i))
+                                .is_some_and(|object| object.full_id == chat.source_id && Some(object.key.region) == world.main_region)
+                            && let Some(line) = chat
+                                .message
+                                .strip_prefix("<auroraCombat>")
+                                .and_then(|line| line.strip_suffix("</auroraCombat>"))
+                        {
+                            self.combat_events.receive(line);
+                        }
                         if chat.message.starts_with("<auroraPortal>")
                             && self.available()
                             && world

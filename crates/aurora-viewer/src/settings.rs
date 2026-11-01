@@ -631,6 +631,7 @@ pub struct Settings {
     pub payment_sent_opens_conversation: bool,
     /// Mini-map and world map options (Firestorm MiniMap* / Map* settings).
     pub maps: MapSettings,
+    pub(crate) combat: crate::combat::Settings,
     /// "Search": last tab, rating boxes and land limits.
     pub search: crate::world::search::SearchSettings,
     /// Other panels open at exit (restored at startup) and the People tab.
@@ -1738,6 +1739,7 @@ impl Default for Settings {
             payment_opens_conversation: true,
             payment_sent_opens_conversation: false,
             maps: MapSettings::default(),
+            combat: Default::default(),
             search: Default::default(),
             show_people: true,
             people_tab: 0,
@@ -2174,12 +2176,46 @@ impl Settings {
         let new_profile = file.is_none();
         let mut s = file
             .and_then(|b| {
-                let Ok(value) = serde_json::from_slice::<serde_json::Value>(&b) else {
+                let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&b) else {
                     // rewritten with the defaults at the next save: keep it
                     log::warn!("settings.json is not readable JSON, defaults used");
                     crate::tolerant::backup(path);
                     return None;
                 };
+                if let Some(tactical) = value
+                    .get_mut("maps")
+                    .and_then(|m| m.get_mut("tactical"))
+                    .and_then(|t| t.as_object_mut())
+                    && !tactical.contains_key("library")
+                {
+                    let backup = path.with_extension("pre-combat-workspace.json");
+                    if !backup.exists()
+                        && let Err(error) = std::fs::copy(path, &backup)
+                    {
+                        log::warn!("combat workspace settings backup failed: {error}");
+                    }
+                    if !tactical.contains_key("ping_audience") {
+                        let audience = if tactical.get("share").and_then(|v| v.as_bool()) != Some(true) {
+                            0
+                        } else if tactical.get("share_group").and_then(|v| v.as_bool()) == Some(true) {
+                            2
+                        } else {
+                            1
+                        };
+                        tactical.insert("ping_audience".into(), serde_json::json!(audience));
+                    }
+                }
+                if value
+                    .get("combat")
+                    .is_some_and(|v| v.get("hitmarker").is_some() || v.get("hit_sound").is_some())
+                {
+                    let backup = path.with_extension("pre-krs.json");
+                    if !backup.exists()
+                        && let Err(error) = std::fs::copy(path, &backup)
+                    {
+                        log::warn!("combat settings backup failed: {error}");
+                    }
+                }
                 saved_window = saved_window_state(&value);
                 // Select before serde fills missing fields: default auto-replies
                 // must use the saved locale too, without replacing custom text.
@@ -2576,6 +2612,31 @@ impl Settings {
         } else {
             10.0
         };
+        // Combat 2.0 used separate arrays before reward rows became paired.
+        // Preserve their values while moving them to Award::ALL order.
+        let combat_awards = crate::combat::awards::Award::ALL.len();
+        if self.combat.announcement_assets.len() == 10 {
+            let old = std::mem::take(&mut self.combat.announcement_assets);
+            let mut migrated = vec![String::new(); combat_awards];
+            for (old_slot, new_slot) in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].into_iter().enumerate() {
+                migrated[new_slot] = old[old_slot].clone();
+            }
+            self.combat.announcement_assets = migrated;
+        } else {
+            self.combat.announcement_assets.resize(combat_awards, String::new());
+            self.combat.announcement_assets.truncate(combat_awards);
+        }
+        if self.combat.medal_textures.len() == 9 {
+            let old = std::mem::take(&mut self.combat.medal_textures);
+            let mut migrated = vec![String::new(); combat_awards];
+            for (old_slot, new_slot) in [0, 1, 2, 4, 6, 9, 10, 12, 11].into_iter().enumerate() {
+                migrated[new_slot] = old[old_slot].clone();
+            }
+            self.combat.medal_textures = migrated;
+        } else {
+            self.combat.medal_textures.resize(combat_awards, String::new());
+            self.combat.medal_textures.truncate(combat_awards);
+        }
         self
     }
 
@@ -2786,6 +2847,7 @@ impl Settings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct MapSettings {
+    pub(crate) tactical: crate::combat::tactical::Settings,
     /// MiniMapScale: pixels per region, 32..4096.
     pub mini_scale: f32,
     /// MiniMapRotate: camera direction at the top (else north).
@@ -2834,6 +2896,7 @@ pub struct MapSettings {
 impl Default for MapSettings {
     fn default() -> Self {
         MapSettings {
+            tactical: Default::default(),
             mini_scale: 128.0,
             // forced to north-up at the first login (llnetmap.cpp)
             mini_rotate: false,

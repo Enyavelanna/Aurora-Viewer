@@ -4,6 +4,83 @@ All the `AURORA_*` environment variables of the viewer: demo mode,
 screenshots, test scenarios, forced settings and profiling. The command-line
 arguments are in the [README](../README.md#command-line).
 
+## Combat 2.0
+
+`AURORA_DEMO_COMBAT=pings` seeds two named callers, a raised Contact and an
+own objective with an explicit response at frame 620. `ping-wheel` adds the
+native hold wheel over the same scene; capture at frame 664 with
+`AURORA_DEMO_CAMERA=ml`, or without that variable in normal view. Use
+`AURORA_DEMO_OPTIONS=combat/5` to inspect full identities and responses.
+These are offline fixtures, not proof of network delivery.
+
+Human two-client same-region checks: select each other in Sharing; enable
+send/receive. Tap terrain for a location, aim at a visible avatar for Contact,
+then double tap terrain within 350 ms. The second tap must upgrade one ping,
+not create another, extend expiry or bypass the three-second placement cooldown.
+Walls must prevent automatic Contact. Both shortcuts have independent switches.
+Hold the key: the camera stops, the cursor becomes visible, moving into a sector
+then releasing places that type. Centre, Escape and right click cancel; focus
+loss, Combat/ping disable and region changes must restore normal camera input.
+The location is captured before the wheel. Aim at a received icon and tap for
+On my way: the sender sees one responder, duplicates never increment it; aim at
+an own icon and tap to cancel it on both clients. Verify full identity/status
+in Combat > Pings, first names on both maps, height cues, expiry, and cancel or
+Contact packets arriving before Place. Older received pings remain visible but
+cannot be acknowledged. A dispatch attempt must never be labelled delivered/read.
+In mouselook, bring the reticle within 120 UI pixels of a forward ping: icon,
+caption and shadow should fade smoothly to 35% at the centre, then restore as
+the reticle moves away. Response targeting stays active. Third-person view,
+edge guidance and the minimap retain their normal opacity. Test the independent
+fade switch and UI scaling. Nearby callers' labels must not overlap or lose ownership.
+
+| Variable | Purpose |
+|---|---|
+| `AURORA_DEMO_COMBAT=1` | Open Combat with synthetic confirmed deaths, awards, markers and pings. |
+
+`AURORA_DEMO_COMBAT=navigation` creates explicit pings around the demo avatar,
+including a grouped help/contact direction, without the medal or journal window.
+Capture in normal view and with `AURORA_DEMO_CAMERA=ml` at frame 664 (that camera
+scenario leaves mouselook at frame 700). Turn the camera through
+each ping: its edge guide must become an in-world marker, preserve left/right
+when behind the camera, and expire with the ping. Combat > Pings can disable
+guidance separately. Verify at different UI scales and viewport sizes; at most
+four directional guides should be visible, with help/contact taking priority.
+
+With `AURORA_DEMO=1`, enable the journal, kill confirmation marker, medal display,
+screen feed and tactical map in memory. No grid login or scripted upload is
+performed. Inspect Global/Personal recap and French, English and Japanese
+labels. Me > Advanced > Combat holds every switch and configuration;
+`AURORA_DEMO_OPTIONS=combat` opens the overview. Suffixes /1 through /6 select
+Combat, Rewards, Minimap, Markers and sets, Pings, and Sharing respectively.
+Use `/editor` to capture the separate region canvas. Draw all four marker shapes,
+move a selection, change its properties, undo, cancel a drag with Escape, switch
+sets and verify the same annotations on the minimap. Check the medal over a bright
+world background: it must have no opaque panel or scene blur.
+Also draw a non-square rectangle and a freehand route, hatch circular and rectangular
+zones, vary grid spacing, snap placements, erase a marker and undo. Save/reload and
+share with an updated peer to verify that paths and hatching persist.
+The recap holds only deaths. Hiding its tab must not stop recording.
+Use `AURORA_DEMO_COMBAT=workspace` for window captures with the same markers
+and journal data, without automatic combat overlays obscuring the controls.
+
+Human grid checks: compile/wear helper 1.42; verify DAMAGE produces no audio or
+marker, another player's kill produces no personal marker, and our confirmed
+DEATH produces a kill marker and optional kill sound. Verify close successive
+kills, suicides/environment deaths, five-second multikill boundaries, life
+thresholds and independent voices/medals. Inspect a session longer than 200
+deaths and the acknowledged JSONL journal. Disabling recording stops new
+history rows; hiding the tab alone does not. The full session remains in
+memory; UI rows are virtualized and the expiring screen feed is separate.
+
+Two updated peers must authorize selected senders or opt into the same
+current group. Test all shapes, maximum-name errors, repeated sends and ping
+expiry. Sharing is region-local and uses tactical protocol 2. Annotation
+limit is 256 and temporary ping display limit 64. Oversized/invalid outgoing
+annotations report a sharing error; group membership must finish loading.
+Markers persist; pings, sends and anchors do not. User data migration retains
+`settings.pre-krs.json`. No live-grid, Mono memory or simulator-CPU validation is
+claimed by offline tests or static LSL lint.
+
 **Demo mode** simulates a server locally (a plaza, avatars, objects, chat,
 notifications…): no connection, no account. It has its own settings and its
 own cache (`…\config\demo`, `…\cache\demo`).

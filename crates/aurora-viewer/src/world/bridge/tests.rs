@@ -1,6 +1,30 @@
 use super::*;
 use std::sync::Arc;
 
+#[test]
+fn combat_reports_require_the_current_worn_bridge_owner_and_region() {
+    let mut sim = Simulator::new();
+    sim.ready();
+    let Some(NetEvent::Chat(mut chat)) = sim.demo.handshake(&sim.bridge, &sim.world) else {
+        panic!("synthetic hello");
+    };
+    let packet = serde_json::json!({"v":2,"epoch":Uuid::from_u128(42),"seq":1,"report":{"event":"DEATH","owner":sim.world.agent_id,"target":Uuid::from_u128(999)}});
+    chat.message = format!("<auroraCombat>{packet}</auroraCombat>");
+    let valid = chat.clone();
+    chat.source_id = Uuid::from_u128(888);
+    assert!(sim.bridge.event(&mut sim.world, &NetEvent::Chat(chat), sim.now));
+    assert!(sim.bridge.take_combat_events().is_empty());
+    let mut other_owner = valid.clone();
+    other_owner.owner_id = Uuid::from_u128(777);
+    sim.bridge.event(&mut sim.world, &NetEvent::Chat(other_owner), sim.now);
+    assert!(sim.bridge.take_combat_events().is_empty());
+    sim.bridge.event(&mut sim.world, &NetEvent::Chat(valid.clone()), sim.now);
+    assert_eq!(sim.bridge.take_combat_events().len(), 1);
+    sim.world.main_region = None;
+    sim.bridge.event(&mut sim.world, &NetEvent::Chat(valid), sim.now);
+    assert!(sim.bridge.take_combat_events().is_empty());
+}
+
 struct Simulator {
     world: World,
     bridge: Bridge,

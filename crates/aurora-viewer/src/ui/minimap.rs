@@ -149,8 +149,11 @@ struct LocalTerrain {
 pub struct MiniMap {
     /// Pan in screen points (y down).
     pan: Vec2,
+    fixed_origin: Option<(f64, f64)>,
     recenter: bool,
     objects: Option<Raster>,
+    editor_objects: Option<Raster>,
+    editor_parcels: Option<Raster>,
     parcels: Option<Raster>,
     terrain: HashMap<RegionHandle, LocalTerrain>,
     /// Avatars marked from the context menu (Mark ▸ color).
@@ -447,10 +450,22 @@ impl MiniMap {
         let mut actions = Vec::new();
         // FIRE-32339: a plain drag moves the floater, Shift + drag pans the
         // map; a locked floater does not move, so any drag pans it
-        let pan_drag = ui.input(|i| i.modifiers.shift) || opts.mini_locked;
+        if !opts.tactical.enabled || !opts.tactical.available() {
+            opts.tactical.draw = None;
+            opts.tactical.drawing_start = None;
+            opts.tactical.editing = false;
+            if let Some((original, _, _)) = opts.tactical.edit_drag.take()
+                && let Some(marker) = opts.tactical.markers.iter_mut().find(|m| m.id == original.id)
+            {
+                *marker = original;
+            }
+        }
+        let drawing = interactive && opts.tactical.draw.is_some();
+        let editing = interactive && opts.tactical.editing && !drawing && !ui.input(|i| i.modifiers.shift);
+        let pan_drag = !drawing && !editing && (ui.input(|i| i.modifiers.shift) || opts.mini_locked);
         let sense = if !interactive {
             Sense::hover()
-        } else if pan_drag || self.dragging {
+        } else if editing || drawing || pan_drag || self.dragging {
             Sense::click_and_drag()
         } else {
             Sense::click()
@@ -471,7 +486,7 @@ impl MiniMap {
                 // keep the pan on the same spot; zoom around the pointer
                 // when the map does not re-center itself
                 self.pan *= opts.mini_scale / old;
-                if !opts.mini_auto_center
+                if (!opts.mini_auto_center || (opts.tactical.available() && opts.tactical.fixed_center))
                     && let Some(m) = resp.hover_pos()
                 {
                     let off = m - rect.center();
@@ -479,14 +494,14 @@ impl MiniMap {
                 }
             }
         }
-        self.dragging = interactive && resp.dragged();
+        self.dragging = interactive && !drawing && !editing && resp.dragged();
         if interactive && resp.hovered() && pan_drag {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         if self.dragging {
             self.pan += resp.drag_delta();
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        } else if opts.mini_auto_center || self.recenter {
+        } else if !(opts.tactical.available() && opts.tactical.fixed_center) && (opts.mini_auto_center || self.recenter) {
             // LLNetMap::draw: pan = lerp(pan, 0, 1 - 2^(-dt / 0.1))
             let k = 1.0 - (-dt / 0.1f32).exp2();
             self.pan *= 1.0 - k;
@@ -498,15 +513,32 @@ impl MiniMap {
 
         let scale = opts.mini_scale;
         let ppm = scale / 256.0;
-        // MiniMapRotate: atan2(at.x, at.y) turns the camera direction up
-        let rot = if opts.mini_rotate { cam.dir.x.atan2(cam.dir.y) } else { 0.0 };
-        let view = View {
-            center: rect.center() + self.pan,
-            cam: to_global(world, cam.pos),
-            ppm,
-            cos: rot.cos(),
-            sin: rot.sin(),
+        let rot = if opts.tactical.available() {
+            if opts.tactical.rotate_avatar {
+                FRAC_PI_2 - world.agent.yaw
+            } else {
+                0.0
+            }
+        } else if opts.mini_rotate {
+            cam.dir.x.atan2(cam.dir.y)
+        } else {
+            0.0
         };
+        let camera = to_global(world, cam.pos);
+        if opts.tactical.available() && opts.tactical.fixed_center {
+            if self.recenter {
+                self.fixed_origin = Some(to_global(world, world.agent.position));
+                self.pan = Vec2::ZERO;
+                self.recenter = false;
+            }
+            let origin = *self.fixed_origin.get_or_insert(camera);
+            let frame = View::new(rect.center(), origin, ppm, rot);
+            self.fixed_origin = Some(frame.to_global(rect.center() - self.pan));
+            self.pan = Vec2::ZERO;
+        } else {
+            self.fixed_origin = None;
+        }
+        let view = View::new(rect.center() + self.pan, self.fixed_origin.unwrap_or(camera), ppm, rot);
 
         // --- region tiles (the floater's background shows elsewhere) ---
         let main = world.main_region;
@@ -612,7 +644,12 @@ impl MiniMap {
         }
 
         // --- avatars ---
-        let dot_r = (DOT_SCALE * ppm).max(MIN_DOT_RADIUS);
+        let dot_r = (DOT_SCALE * ppm).max(MIN_DOT_RADIUS)
+            * if opts.tactical.available() && opts.tactical.dots_enabled {
+                opts.tactical.dot_scale.clamp(0.5, 3.0)
+            } else {
+                1.0
+            };
         let pointer = resp.hover_pos();
         let mut closest: Option<(f32, Uuid, Vec3, bool)> = None;
         let mut under: Vec<Uuid> = Vec::new();
@@ -642,6 +679,33 @@ impl MiniMap {
             } else {
                 None
             };
+            let col = opts
+                .tactical
+                .group_colors
+                .iter()
+                .filter(|_| opts.tactical.available() && opts.tactical.dots_enabled)
+                .find_map(|(group, color)| {
+                    world
+                        .group_data
+                        .get(group)
+                        .filter(|g| g.members.contains_key(&id))
+                        .map(|_| crate::combat::tactical::color(*color))
+                })
+                .unwrap_or(col);
+            let col = opts
+                .tactical
+                .player_colors
+                .get(&id)
+                .filter(|_| opts.tactical.available() && opts.tactical.dots_enabled)
+                .map(|c| crate::combat::tactical::color(*c))
+                .unwrap_or(col);
+            if opts.tactical.available() && opts.tactical.dots_enabled && opts.tactical.outline_width > 0.0 {
+                painter.circle_filled(
+                    sp,
+                    dot_r + opts.tactical.outline_width.clamp(0.0, 4.0),
+                    crate::combat::tactical::color(opts.tactical.outline),
+                );
+            }
             draw_avatar(&painter, sp, dot_r, col, dz);
             if let Some(m) = pointer {
                 let d = sp.distance(m);
@@ -655,6 +719,8 @@ impl MiniMap {
         }
 
         // --- tracking ---
+        opts.tactical.prune();
+        opts.tactical.map(&painter, &view, world);
         if let Some(t) = &world.map.track {
             let sp = view.to_screen(t.x, t.y);
             draw_tracking(&painter, rect, sp, TRACK_COLOR, t.z - cam.pos.z, None);
@@ -688,9 +754,9 @@ impl MiniMap {
         // --- camera cone: points up when rotating, else along the camera ---
         let hfov = cam.hfov.clamp(0.1, PI * 0.95);
         let radius = cam.far * ppm;
-        let heading = if opts.mini_rotate { FRAC_PI_2 } else { cam.dir.y.atan2(cam.dir.x) };
+        let heading = cam.dir.y.atan2(cam.dir.x) + rot;
         let steps = ((hfov * 40.0 / TAU).round() as usize).max(1);
-        let apex = view.center;
+        let apex = view.to_screen(camera.0, camera.1);
         let mut pts = vec![apex];
         for i in 0..=steps {
             let a = heading - hfov * 0.5 + hfov * i as f32 / steps as f32;
@@ -704,6 +770,145 @@ impl MiniMap {
         draw_directions(&painter, rect, rot);
 
         if !interactive {
+            return actions;
+        }
+
+        // Drawing claims its primary clicks and drags before teleport/window gestures.
+        if drawing {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            text_shadow(
+                &painter,
+                rect.left_top() + vec2(8.0, 8.0),
+                egui::Align2::LEFT_TOP,
+                aurora_i18n::tr!("tactical-draw-help"),
+                12.0,
+                p.ink,
+            );
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                opts.tactical.draw = None;
+                opts.tactical.drawing_start = None;
+            } else if let Some(pointer) = resp.hover_pos() {
+                let (x, y) = view.to_global(pointer);
+                let point = [x, y, world.agent.position.z as f64];
+                if let (Some(start), Some(shape)) = (opts.tactical.drawing_start, opts.tactical.draw)
+                    && let Some(preview) = crate::combat::tactical::Marker::drawn(shape, start, point, opts.tactical.colors[2])
+                {
+                    opts.tactical.paint_map(&painter, &view, &preview);
+                }
+                if resp.clicked_by(egui::PointerButton::Primary) {
+                    if let Some(start) = opts.tactical.drawing_start {
+                        if let Some(shape) = opts.tactical.draw
+                            && let Some(marker) = crate::combat::tactical::Marker::drawn(shape, start, point, opts.tactical.colors[2])
+                            && opts.tactical.markers.len() < 256
+                        {
+                            opts.tactical.markers.push(marker);
+                            opts.tactical.draw = None;
+                            opts.tactical.drawing_start = None;
+                        }
+                    } else {
+                        opts.tactical.drawing_start = Some(point);
+                    }
+                }
+            }
+            return actions;
+        }
+
+        if editing {
+            let cfg = &mut opts.tactical;
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if let Some((original, _, _)) = cfg.edit_drag.take()
+                    && let Some(marker) = cfg.markers.iter_mut().find(|m| m.id == original.id)
+                {
+                    *marker = original;
+                }
+                cfg.editing = false;
+                return actions;
+            }
+            if let Some(pointer) = resp.interact_pointer_pos() {
+                let (x, y) = view.to_global(pointer);
+                if resp.drag_started() || resp.clicked() || resp.secondary_clicked() {
+                    let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pointer);
+                    let nearest = cfg
+                        .markers
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, m)| {
+                            let center = view.to_screen(m.position[0], m.position[1]);
+                            let endpoint = m
+                                .end
+                                .map(|e| view.to_screen(e[0], e[1]))
+                                .unwrap_or_else(|| view.to_screen(m.position[0] + m.radius as f64, m.position[1]));
+                            let resize = !matches!(
+                                m.shape(),
+                                crate::combat::tactical::Shape::Point | crate::combat::tactical::Shape::Freehand
+                            ) && endpoint.distance(origin) < center.distance(origin);
+                            let distance = if resize {
+                                endpoint.distance(origin)
+                            } else {
+                                center.distance(origin)
+                            };
+                            (distance < 18.0).then_some((i, resize, distance))
+                        })
+                        .min_by(|a, b| a.2.total_cmp(&b.2));
+                    for marker in &mut cfg.markers {
+                        marker.selected = false;
+                    }
+                    if let Some((index, resize, _)) = nearest {
+                        cfg.markers[index].selected = true;
+                        let (start_x, start_y) = view.to_global(origin);
+                        cfg.edit_drag = Some((cfg.markers[index].clone(), [start_x, start_y], resize));
+                    }
+                }
+                if resp.dragged()
+                    && let Some((original, start, resize)) = &cfg.edit_drag
+                    && let Some(marker) = cfg.markers.iter_mut().find(|m| m.id == original.id)
+                {
+                    let mut candidate = original.clone();
+                    if *resize {
+                        if candidate.shape() == crate::combat::tactical::Shape::Circle {
+                            candidate.radius = ((x - candidate.position[0]).hypot(y - candidate.position[1]) as f32).clamp(0.1, 1024.0);
+                        } else if let Some(drawn) = crate::combat::tactical::Marker::drawn(
+                            candidate.shape(),
+                            candidate.position,
+                            [x, y, candidate.position[2]],
+                            candidate.color,
+                        ) {
+                            candidate.end = drawn.end;
+                        }
+                    } else {
+                        for (axis, delta) in [x - start[0], y - start[1]].into_iter().enumerate() {
+                            candidate.position[axis] += delta;
+                            if let Some(end) = &mut candidate.end {
+                                end[axis] += delta;
+                            }
+                            for point in &mut candidate.path {
+                                point[axis] += delta;
+                            }
+                        }
+                    }
+                    if candidate.valid() {
+                        *marker = candidate;
+                    }
+                }
+            }
+            if resp.drag_stopped() {
+                cfg.edit_drag = None;
+                cfg.save_set();
+            }
+            for marker in cfg.markers.iter().filter(|m| m.selected) {
+                let at = view.to_screen(marker.position[0], marker.position[1]);
+                painter.circle_stroke(at, 12.0, Stroke::new(2.0, p.violet));
+                if let Some(end) = marker.end {
+                    painter.circle_stroke(view.to_screen(end[0], end[1]), 6.0, Stroke::new(2.0, p.violet));
+                }
+            }
+            resp.context_menu(|ui| {
+                if let Some(marker) = cfg.markers.iter_mut().find(|m| m.selected) {
+                    ui.text_edit_singleline(&mut marker.name);
+                    crate::ui::widgets::color_button(ui, p, "marker-edit-color", &mut marker.color, true);
+                }
+                menu::toggle(ui, p, "edit", aurora_i18n::tr!("tactical-edit"), &mut cfg.editing);
+            });
             return actions;
         }
 
@@ -779,6 +984,16 @@ impl MiniMap {
                 ui.close();
                 return;
             };
+            if opts.tactical.available() && opts.tactical.enabled && menu::item(ui, p, "map-pin-filled", aurora_i18n::tr!("tactical-add")) {
+                opts.tactical.add_marker([px, py, world.agent.position.z as f64]);
+            }
+            if opts.tactical.available() && opts.tactical.pings_enabled {
+                for kind in 0..4 {
+                    if menu::item(ui, p, "map-pin-filled", crate::combat::tactical::kind_name(kind)) {
+                        opts.tactical.ping([px, py, world.agent.position.z as f64], kind);
+                    }
+                }
+            }
             if let Some(&first) = avs.first() {
                 if avs.len() == 1 {
                     if menu::item(ui, p, "user-filled", aurora_i18n::tr!("common-view-profile")) {
@@ -906,23 +1121,55 @@ impl MiniMap {
                     &mut opts.mini_collision,
                 );
             });
+            if opts.tactical.available() {
+                menu::toggle(
+                    ui,
+                    p,
+                    "lock-filled",
+                    aurora_i18n::tr!("tactical-fixed-center"),
+                    &mut opts.tactical.fixed_center,
+                );
+                menu::toggle(
+                    ui,
+                    p,
+                    "compass-filled",
+                    aurora_i18n::tr!("tactical-rotate-avatar"),
+                    &mut opts.tactical.rotate_avatar,
+                );
+                if opts.tactical.enabled {
+                    menu::toggle(ui, p, "edit", aurora_i18n::tr!("tactical-edit"), &mut opts.tactical.editing);
+                    for shape in [crate::combat::tactical::Shape::Rectangle, crate::combat::tactical::Shape::Line] {
+                        if menu::item(ui, p, "map-pin-filled", shape.label()) {
+                            opts.tactical.draw = Some(shape);
+                            opts.tactical.drawing_start = None;
+                        }
+                    }
+                }
+            }
             if menu::check(
                 ui,
                 p,
                 "compass-filled",
                 aurora_i18n::tr!("ui-minimap-north-up"),
-                !opts.mini_rotate,
+                if opts.tactical.available() {
+                    !opts.tactical.rotate_avatar
+                } else {
+                    !opts.mini_rotate
+                },
                 true,
             ) {
                 opts.mini_rotate = false;
+                if opts.tactical.available() {
+                    opts.tactical.rotate_avatar = false;
+                }
             }
             if menu::check(
                 ui,
                 p,
                 "camera-filled",
                 aurora_i18n::tr!("ui-minimap-camera-up"),
-                opts.mini_rotate,
-                true,
+                opts.mini_rotate && !opts.tactical.available(),
+                !opts.tactical.available(),
             ) {
                 opts.mini_rotate = true;
             }
@@ -941,7 +1188,7 @@ impl MiniMap {
                 p,
                 "arrows-minimize",
                 aurora_i18n::tr!("ui-minimap-center-map"),
-                !opts.mini_auto_center && self.pan != Vec2::ZERO,
+                opts.tactical.fixed_center || (!opts.mini_auto_center && self.pan != Vec2::ZERO),
             ) {
                 self.recenter = true;
             }
@@ -1066,10 +1313,100 @@ impl MiniMap {
         self.terrain.get(&handle).map(|t| t.tex.clone())
     }
 
+    /// The region editor uses the exact tile, terrain and object/parcel raster
+    /// functions of the minimap, with separate raster caches for its wider view.
+    pub(crate) fn editor_images(
+        &mut self,
+        ctx: &egui::Context,
+        world: &World,
+        tiles: &mut MapTiles,
+        opts: &MapSettings,
+    ) -> Vec<RegionImage> {
+        let Some(region) = world.main() else {
+            return Vec::new();
+        };
+        let (ox, oy) = aurora_net::handle_to_origin(region.handle);
+        let (width, height) = (region.heightmap.size_x as f64, region.heightmap.size_y as f64);
+        let now = Instant::now();
+        let mut images = Vec::new();
+        self.local_terrain(ctx, world, region, now);
+        if let Some(terrain) = self.terrain.get(&region.handle) {
+            images.push(RegionImage {
+                origin: (ox as f64, oy as f64),
+                size: (width, height),
+                texture: terrain.tex.clone(),
+            });
+        }
+        for y in 0..region.heightmap.size_y.div_ceil(256).min(16) {
+            for x in 0..region.heightmap.size_x.div_ceil(256).min(16) {
+                if let Ok(texture) = tiles.get(1, ox / 256 + x, oy / 256 + y, true) {
+                    images.push(RegionImage {
+                        origin: (ox as f64 + x as f64 * 256.0, oy as f64 + y as f64 * 256.0),
+                        size: (256.0, 256.0),
+                        texture,
+                    });
+                }
+            }
+        }
+        let side = width.max(height) as f32;
+        let center = (ox as f64 + width / 2.0, oy as f64 + height / 2.0);
+        let tpm = 512.0 / side;
+        for (objects, enabled) in [(true, opts.mini_objects), (false, opts.mini_property_lines)] {
+            let cache = if objects {
+                &mut self.editor_objects
+            } else {
+                &mut self.editor_parcels
+            };
+            if !enabled {
+                *cache = None;
+                continue;
+            }
+            if cache
+                .as_ref()
+                .is_none_or(|r| r.center != center || r.scale != side || now.duration_since(r.built) >= OBJECTS_REFRESH)
+            {
+                let pixels = if objects {
+                    rasterize_objects(world, center, 512, tpm, opts)
+                } else {
+                    rasterize_parcels(world, center, 512, tpm, opts.mini_for_sale, opts.mini_collision)
+                };
+                *cache = Some(store_raster(
+                    ctx,
+                    cache.take(),
+                    if objects {
+                        "combat-editor-objects"
+                    } else {
+                        "combat-editor-parcels"
+                    },
+                    pixels,
+                    center,
+                    tpm,
+                    512,
+                    side,
+                    0,
+                ));
+            }
+            if let Some(raster) = cache {
+                images.push(RegionImage {
+                    origin: (center.0 - side as f64 / 2.0, center.1 - side as f64 / 2.0),
+                    size: (side as f64, side as f64),
+                    texture: raster.tex.clone(),
+                });
+            }
+        }
+        images
+    }
+
     /// Forget per-region data of regions that are gone.
     pub fn prune(&mut self, world: &World) {
         self.terrain.retain(|h, _| world.regions.contains_key(h));
     }
+}
+
+pub(crate) struct RegionImage {
+    pub origin: (f64, f64),
+    pub size: (f64, f64),
+    pub texture: egui::TextureHandle,
 }
 
 /// Ground under a global position, else our own height (teleport target).
@@ -1456,6 +1793,9 @@ fn beacon_marker(clip: glam::Vec4, inner: Rect, proj: &super::hud::Projector) ->
     let t = (inner.width() * 0.5 / dir.x.abs().max(1e-4)).min(inner.height() * 0.5 / dir.y.abs().max(1e-4));
     Some((inner.center() + dir * t, false, dir))
 }
+
+#[cfg(test)]
+mod combat_tests;
 
 #[cfg(test)]
 mod beacon_tests {

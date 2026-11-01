@@ -1116,6 +1116,14 @@ fn main_menus(ui: &mut egui::Ui, p: &Palette, panels: &mut Panels, st: &StatusIn
             flip_window(
                 ui,
                 p,
+                "crosshair",
+                aurora_i18n::tr!("combat-title"),
+                crate::ui::combat_window::WINDOW,
+                &mut panels.combat,
+            );
+            flip_window(
+                ui,
+                p,
                 "code-circle-filled",
                 toolbox,
                 crate::ui::dev_toolbox::WINDOW,

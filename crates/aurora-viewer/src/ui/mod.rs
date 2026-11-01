@@ -14,6 +14,9 @@ pub mod bars;
 pub mod bidi;
 pub mod blacklist;
 pub mod bumps;
+pub(crate) mod combat_editor;
+pub(crate) mod combat_rewards;
+pub(crate) mod combat_window;
 pub mod sound_explorer;
 // Bug report form (disabled, see main.rs):
 // pub mod bug_report;
@@ -138,6 +141,7 @@ pub struct Panels {
     pub perf: bool,
     /// The Dev Toolbox (Advanced › Dev Toolbox, Ctrl+Alt+D).
     pub dev_toolbox: bool,
+    pub combat: bool,
     /// Advanced › Region console (SimConsoleAsync, estate managers).
     pub sim_console: bool,
     /// The photo window (Firestorm's snapshot floater).
@@ -212,6 +216,7 @@ impl Panels {
             chat: settings.show_chat,
             perf: settings.show_perf,
             dev_toolbox: false,
+            combat: false,
             sim_console: false,
             snapshot: false,
             people: settings.show_people,

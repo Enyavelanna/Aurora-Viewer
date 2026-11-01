@@ -1400,6 +1400,18 @@ remain in progress.
 
 ## `aurora-viewer` in detail
 
+Combat 2.0 lives in `combat.rs` and `combat/{ui,wire,awards,journal,pings,ping_ui,navigation,sets,tactical,transfer}.rs`,
+with `ui/combat_window.rs`, `ui/combat_rewards.rs`, `ui/combat_editor.rs` and `ui/options/pages/combat.rs`.
+`combat/wire.rs` validates the official DEATH-only relay (helper 1.42, version-2 JSON envelope) with
+sequence/identity checks and bounded queues; `combat/awards.rs` holds the local multikill, life-streak and
+opponent-record rules; `combat/journal.rs` keeps the full session in memory and appends an acknowledged JSONL
+log on a background writer. `combat/pings.rs` owns session-only version-4 Place/Contact/Acknowledge/Cancel
+messages with authenticated sender binding, replay guards and out-of-order control; `combat/{ping_ui,navigation}.rs`
+provide the native four-sector hold wheel and off-camera edge guidance; `combat/{sets,transfer}.rs` own
+region/grid-scoped annotation sets and bounded multipart sharing. The reward studio shares its presentation
+metadata with the staged in-world medal banner, and `ui/combat_editor.rs` is an independent region canvas over
+the active set. Settings live in a native floater (Me > Advanced > Combat); DAMAGE never plays a sound, marker or award.
+
 Inventory local-file thumbnails prepare whole-image square scaling
 (LLViewerTextureList::convertToUploadFile with force_square), proportional fit
 with transparent margins, and a movable crop on bounded background jobs in

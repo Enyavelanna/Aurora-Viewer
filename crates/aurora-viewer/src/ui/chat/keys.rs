@@ -57,7 +57,7 @@ pub(super) fn after_close(order: &[Tab], closed: Uuid) -> Tab {
 /// The keys of this frame, before the window's field reads them. `order`:
 /// the conversations as the list shows them.
 pub(super) fn handle(ctx: &egui::Context, st: &mut ChatUi, order: &[Tab], actions: &mut Vec<ConvAction>) {
-    let current = (!st.contacts).then_some(st.selected);
+    let current = (!st.contacts && !st.combat_selected).then_some(st.selected);
     let window = egui::Id::unique(WINDOW);
     // the cross of the window otherwise (`widgets::Floater`)
     if !crate::ui::close_key::closes_every_window(ctx)

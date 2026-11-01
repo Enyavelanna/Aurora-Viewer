@@ -13,6 +13,8 @@ const MAX_REPLY: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Query {
+    Combat(bool),
+    Tactical { targets: Vec<Uuid>, payload: String },
     Portal { target: Uuid, message: super::portal::Message },
     Pose { request: Uuid, kind: PoseKind, target: Uuid },
     Altitudes(Vec<Uuid>),
@@ -97,6 +99,8 @@ pub struct ObjectInfo {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reply {
+    Combat,
+    Tactical,
     Portal,
     Pose,
     Altitudes(Vec<Altitude>),
@@ -107,6 +111,15 @@ pub enum Reply {
 impl Query {
     pub fn valid(&self) -> bool {
         match self {
+            Self::Combat(_) => true,
+            Self::Tactical { targets, payload } => {
+                !targets.is_empty()
+                    && targets.len() <= 16
+                    && targets.iter().all(|id| !id.is_nil())
+                    && targets.iter().collect::<HashSet<_>>().len() == targets.len()
+                    && payload.len() + targets.len() * 37 <= 700
+                    && STANDARD.decode(payload).is_ok_and(|v| v.len() <= 480)
+            }
             Self::Portal { target, message } => {
                 message.encode().is_some()
                     && (!matches!(
@@ -126,6 +139,11 @@ impl Query {
     }
     fn body(&self, token: Uuid) -> String {
         match self {
+            Self::Combat(enabled) => format!("query|{token}|combat|{}", u8::from(*enabled)),
+            Self::Tactical { targets, payload } => format!(
+                "query|{token}|tactical|{};{payload}",
+                targets.iter().map(Uuid::to_string).collect::<Vec<_>>().join(",")
+            ),
             Self::Portal { target, message } => format!("query|{token}|portal|{target},{}", message.encode().unwrap_or_default()),
             Self::Pose { request, kind, target } => format!("query|{token}|pose|{},{request},{target}", kind.wire()),
             Self::Altitudes(ids) => format!(
@@ -143,6 +161,8 @@ impl Query {
         let value: Value = serde_json::from_slice(bytes).ok()?;
         let values = value.as_array()?;
         match self {
+            Self::Combat(_) => values.is_empty().then_some(Reply::Combat),
+            Self::Tactical { .. } => values.is_empty().then_some(Reply::Tactical),
             Self::Portal { .. } => values.is_empty().then_some(Reply::Portal),
             Self::Pose { .. } => values.is_empty().then_some(Reply::Pose),
             Self::Altitudes(requested) => {
@@ -285,6 +305,39 @@ pub async fn send(endpoint: Endpoint, query: Query) -> Result<Reply, String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn tactical_batches_bound_the_wire_size_and_reject_bad_recipient_lists() {
+        let payload = STANDARD.encode(br#"{\"marker\":1}"#);
+        let query = Query::Tactical {
+            targets: vec![id(1), id(2)],
+            payload: payload.clone(),
+        };
+        assert!(query.valid());
+        assert!(query.body(id(3)).len() <= 768);
+        assert_eq!(query.decode(b"[]"), Some(Reply::Tactical));
+        assert!(
+            !Query::Tactical {
+                targets: vec![id(1), id(1)],
+                payload: payload.clone()
+            }
+            .valid()
+        );
+        assert!(
+            !Query::Tactical {
+                targets: vec![Uuid::nil()],
+                payload: payload.clone()
+            }
+            .valid()
+        );
+        assert!(
+            !Query::Tactical {
+                targets: vec![id(1), id(2)],
+                payload: STANDARD.encode([0u8; 480])
+            }
+            .valid()
+        );
+    }
 
     fn id(n: u128) -> Uuid {
         Uuid::from_u128(n)

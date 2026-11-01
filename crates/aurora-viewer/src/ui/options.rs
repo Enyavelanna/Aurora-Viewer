@@ -26,6 +26,19 @@ use std::collections::{HashMap, HashSet};
 /// The preferences' window (its layout is saved under this id).
 pub const WINDOW: &str = "preferences";
 
+/// Reuse the preference row engine, including native cogs, in Combat's floater.
+pub(crate) fn combat_controls(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, tab: usize) -> OptionsResult {
+    let d = Settings::default();
+    let mut r = OptionsResult::default();
+    for mode in [Mode::Count, Mode::Show] {
+        let mut cx = Cx::new(ui, *p, s, &d, st, &mut r, mode, "");
+        cx.enter(Page::Combat, tab);
+        pages::combat::page(&mut cx, tab);
+        r.changed |= cx.changed;
+    }
+    r
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Capture {
     Binding(crate::keybinds::Action, usize),
@@ -65,6 +78,7 @@ pub enum Page {
     System,
     Network,
     Fun,
+    Combat,
 }
 
 impl Page {
@@ -116,6 +130,7 @@ impl Page {
             Page::System => "system",
             Page::Network => "network",
             Page::Fun => "fun",
+            Page::Combat => "combat",
         }
     }
 
@@ -142,6 +157,7 @@ impl Page {
             Page::System => aurora_i18n::tr!("ui-options-page-system"),
             Page::Network => aurora_i18n::tr!("ui-options-network-and-cache"),
             Page::Fun => aurora_i18n::tr!("ui-options-fun"),
+            Page::Combat => aurora_i18n::tr!("combat-preferences-title"),
         }
     }
 
@@ -169,6 +185,7 @@ impl Page {
             Page::System => aurora_i18n::tr!("ui-options-about-system"),
             Page::Network => aurora_i18n::tr!("ui-options-about-network"),
             Page::Fun => aurora_i18n::tr!("ui-options-about-fun"),
+            Page::Combat => aurora_i18n::tr!("combat-preferences-about"),
         }
     }
 
@@ -195,6 +212,7 @@ impl Page {
             Page::System => "world-filled",
             Page::Network => "cloud-data-connection-filled",
             Page::Fun => "confetti-filled",
+            Page::Combat => "alert-triangle-filled",
         }
     }
 
@@ -333,6 +351,9 @@ const UNDO_SECONDS: f64 = 8.0;
 #[derive(Default)]
 pub struct OptionsUi {
     saved_graphics: saved_graphics::Editor,
+    pub(crate) tactical_context: crate::combat::tactical::Context,
+    pub(crate) combat_reward_selected: usize,
+    pub(crate) combat_medal_images: HashMap<uuid::Uuid, egui::TextureHandle>,
     pub current_parcel: Option<crate::world::parcel_visibility::Entry>,
     pub selected_parcel: Option<crate::world::parcel_visibility::Entry>,
     pub rlva_tools: super::rlva::Tools,
@@ -574,6 +595,8 @@ pub struct OptionsResult {
     pub clear_cache: bool,
     /// Devices, volumes or voice settings changed: apply to the audio engine.
     pub audio_changed: bool,
+    /// A Combat 2.0 reward row requested its configured sound/image preview.
+    pub combat_preview: Option<usize>,
     /// List the audio devices again.
     pub refresh_devices: bool,
     /// Every setting went back to its default.

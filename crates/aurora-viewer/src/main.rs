@@ -25,6 +25,7 @@ mod camera;
 mod cli;
 mod cmdline;
 mod colorblind;
+mod combat;
 mod crash;
 mod creation_permissions;
 mod credentials;

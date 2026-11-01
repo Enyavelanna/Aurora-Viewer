@@ -162,6 +162,11 @@ pub(super) fn show(ui: &mut egui::Ui, env: Env, world: &mut World, st: &mut Chat
             ui.set_width(ui.available_width());
             ui.set_height(h);
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            if st.combat_selected {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+                super::combat_pane(ui, p, world, st);
+                return;
+            }
             if st.contacts {
                 let pane = ui.available_rect_before_wrap();
                 let pane = egui::Rect::from_min_size(pane.min, egui::vec2(pane.width(), h));

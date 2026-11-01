@@ -1073,6 +1073,17 @@ impl Scene {
         self.interaction_point_among(world, ray, depth, build, far, None)
     }
 
+    /// A tactical ping captures its ray on key-down. Use indexed CPU geometry
+    /// and terrain rather than the delayed cursor-depth result; exclude self
+    /// and worn equipment so the mouselook ray cannot hit our head or gun.
+    pub(crate) fn tactical_pick(&self, world: &World, ray: (Vec3, Vec3), far: f32) -> Option<(Vec3, bool)> {
+        let mut candidates = Vec::new();
+        self.pick.ray_candidates(ray, &mut candidates);
+        let own = world.objects.index_of_uuid(&world.agent_id);
+        candidates.retain(|&idx| own.is_none_or(|own| idx != own && self.gpu.get(idx).is_none_or(|g| g.owner_avatar != Some(own))));
+        self.point_behind_ignored_target(world, ray, far, Instant::now(), Some(&candidates))
+    }
+
     /// `interaction_point` over the objects of `among` (None: all).
     pub(super) fn interaction_point_among(
         &self,
@@ -1128,8 +1139,21 @@ impl Scene {
         now: Instant,
         among: Option<&[usize]>,
     ) -> Option<Vec3> {
+        self.point_behind_ignored_target(world, ray, far, now, among)
+            .map(|(point, _)| point)
+    }
+
+    fn point_behind_ignored_target(
+        &self,
+        world: &World,
+        ray: (Vec3, Vec3),
+        far: f32,
+        now: Instant,
+        among: Option<&[usize]>,
+    ) -> Option<(Vec3, bool)> {
         let mut nearest = far;
         let mut found = false;
+        let mut contact = false;
         for (idx, g) in self.pick_objects(among) {
             let Some(o) = world.objects.get(idx) else { continue };
             if g.faces.is_empty() || g.hud || o.extra.reflection_probe.is_some() || o.click_action == crate::interaction::code::IGNORE {
@@ -1154,6 +1178,7 @@ impl Scene {
             {
                 nearest = t;
                 found = true;
+                contact = g.is_avatar || g.owner_avatar.is_some();
             }
         }
         // Terrain can also be the target behind an ignored screen.
@@ -1175,12 +1200,13 @@ impl Scene {
                 }
                 nearest = hi;
                 found = true;
+                contact = false;
                 break;
             }
             previous = t;
             t += 1.0;
         }
-        found.then_some(ray.0 + ray.1 * nearest)
+        found.then_some((ray.0 + ray.1 * nearest, contact))
     }
 
     /// The nearest surface the CPU finds along `ray` between `from` and
@@ -1980,6 +2006,28 @@ pub(super) mod tests {
             scene.color_at_ray(&world, ray, true, 100.0),
             Some((world.objects.get(front).unwrap().full_id, [0.1, 0.2, 0.3]))
         );
+    }
+
+    #[test]
+    fn tactical_contact_uses_the_nearest_surface_and_excludes_our_own_equipment() {
+        let (mut world, mut scene, front, back) = scene_with_two_objects();
+        let ray = (Vec3::new(0.0, 0.0, 50.0), Vec3::X);
+        for idx in [front, back] {
+            scene.gpu[idx].center = world.objects.get(idx).unwrap().position;
+            scene.gpu[idx].radius = 1.0;
+            scene.pick.set(idx, super::super::hover::PickEntry::of(&scene.gpu[idx]));
+        }
+        scene.gpu[back].is_avatar = true;
+        // A wall in front of an avatar is a location, not a contact through it.
+        let (point, contact) = scene.tactical_pick(&world, ray, 100.0).unwrap();
+        assert!(!contact);
+        assert!((point.x - 2.5).abs() < 0.01);
+        world.objects.get_mut(front).unwrap().click_action = crate::interaction::code::IGNORE;
+        assert!(scene.tactical_pick(&world, ray, 100.0).unwrap().1);
+        world.agent_id = world.objects.get(back).unwrap().full_id;
+        scene.gpu[front].owner_avatar = Some(back);
+        assert!(scene.tactical_pick(&world, ray, 100.0).is_none());
+        assert!(scene.tactical_pick(&world, ray, 1.0).is_none());
     }
 
     #[test]
