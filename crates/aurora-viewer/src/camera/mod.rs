@@ -547,6 +547,11 @@ impl Camera {
         (base / (1.0 + self.current_fov_zoom)).max(mouselook_zoom::min_view(aspect).min(base))
     }
 
+    /// The factor for a mouselook turn at the angle shown now (`look_scale`).
+    pub fn zoom_look_scale(&self, s: &CameraSettings, strength: f32) -> f32 {
+        mouselook_zoom::look_scale(self.fov_y, s.fov, strength)
+    }
+
     /// Right button down in mouselook (LLToolCompGun::handleRightMouseDown):
     /// the remembered zoomed angle at once. `aspect`: the window's.
     pub fn press_mouselook_zoom(&mut self, s: &CameraSettings, aspect: f32) {

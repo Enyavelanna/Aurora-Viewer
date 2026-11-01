@@ -35,6 +35,15 @@ fn feedback(cx: &mut Cx) {
         cx.toggle(tr!("combat-journal"), "", &field!(combat.journal));
         cx.toggle(tr!("combat-show-tab"), "", &field!(combat.show_tab));
     });
+    cx.group(tr!("combat-zoom-sensitivity"), |cx| {
+        cx.slider(
+            tr!("combat-zoom-sensitivity"),
+            tr!("combat-zoom-sensitivity-help"),
+            &field!(combat.zoom_sensitivity),
+            0.0..=1.0,
+            "",
+        );
+    });
     cx.group(tr!("combat-killmarker"), |cx| {
         cx.toggle(tr!("combat-killmarker"), "", &field!(combat.killmarker));
         cx.subs(false, |cx| {

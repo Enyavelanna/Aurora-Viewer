@@ -12853,6 +12853,8 @@ ui-options-camera-vr-view-first-person = 一人称
 ui-options-camera-vr-view-desktop-camera = カメラの位置
 
 app-vr-leave = { $key } キーでデスクトップモードに戻ります
+combat-zoom-sensitivity = ズーム時のエイム感度
+combat-zoom-sensitivity-help = マウスルックでズーム中（右ボタン押下中）、画面上の動く速さがズームなしと同じになるよう回転を遅くします。0 で通常の回転速度のままです。
 combat-killmarker = キル確認マーカー
 combat-show-tab = 会話に戦闘タブを表示
 combat-suicide = 自滅

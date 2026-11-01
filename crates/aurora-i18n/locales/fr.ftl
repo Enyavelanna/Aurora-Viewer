@@ -12866,6 +12866,8 @@ ui-options-camera-vr-view-first-person = Première personne
 ui-options-camera-vr-view-desktop-camera = Position de la caméra
 
 app-vr-leave = Appuyez sur { $key } pour revenir au mode bureau
+combat-zoom-sensitivity = Sensibilité en visée zoomée
+combat-zoom-sensitivity-help = En mouselook zoomé (bouton droit maintenu), ralentit la rotation pour que la vue défile à l'écran aussi vite que sans zoom. 0 garde la rotation normale.
 combat-killmarker = Marqueur de kills
 combat-show-tab = Afficher Combat dans Conversation
 combat-suicide = suicide

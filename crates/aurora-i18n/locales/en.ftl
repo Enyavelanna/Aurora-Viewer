@@ -12870,6 +12870,8 @@ ui-options-camera-vr-view-first-person = First person
 ui-options-camera-vr-view-desktop-camera = Camera position
 
 app-vr-leave = Press { $key } to return to desktop mode
+combat-zoom-sensitivity = Zoomed aim sensitivity
+combat-zoom-sensitivity-help = While zoomed in mouselook (right button held), slow the turn so the view moves across the screen as fast as it does unzoomed. 0 keeps the plain turn rate.
 combat-killmarker = Kill confirmation marker
 combat-show-tab = Show Combat in Conversations
 combat-suicide = suicide

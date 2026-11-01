@@ -3681,6 +3681,12 @@ impl App {
         if self.camera.mouselook() {
             // Alt held: the grab tool has the free cursor, the view stays
             if !self.alt_cursor.free() {
+                let zoom = if self.settings.combat.enabled {
+                    self.settings.combat.zoom_sensitivity
+                } else {
+                    0.0
+                };
+                let s = s * self.camera.zoom_look_scale(&self.settings.camera, zoom);
                 self.camera.look(dx, dy, s, &mut self.world.agent);
             }
         } else if self.mouse_mode != MouseMode::None {

@@ -54,6 +54,20 @@ pub fn sanitize(angle: Option<f32>) -> Option<f32> {
         .map(|a| a.clamp(MIN_FIELD_OF_VIEW, MAX_FIELD_OF_VIEW))
 }
 
+/// How much a mouselook turn is scaled while the view is zoomed: the ratio
+/// of the screen distance one mouse count covers now to the one at the
+/// normal angle, `tan(current / 2) / tan(normal / 2)`, blended in by
+/// `strength` (0 = unchanged, 1 = the same on-screen speed as unzoomed).
+/// Never above 1: a wider view keeps the plain turn rate. Not in the Legacy
+/// Viewer, whose turn rate ignores the zoom; off by default.
+pub fn look_scale(current: f32, normal: f32, strength: f32) -> f32 {
+    if !strength.is_finite() || strength <= 0.0 || !current.is_finite() || !normal.is_finite() || current <= 0.0 || normal <= 0.0 {
+        return 1.0;
+    }
+    let ratio = ((current * 0.5).tan() / (normal * 0.5).tan()).clamp(0.02, 1.0);
+    1.0 + (ratio - 1.0) * strength.min(1.0)
+}
+
 /// One hold of the right button.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hold {
@@ -158,6 +172,26 @@ mod tests {
         z.release();
         z.press(Some(3.0), DEFAULT_FOV, WIDE);
         assert!((z.angle().unwrap() - MAX_FIELD_OF_VIEW / WIDE).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_turn_rate_follows_the_zoom_only_as_much_as_asked() {
+        let normal = 1.0;
+        let zoomed = 0.25;
+        let full = look_scale(zoomed, normal, 1.0);
+        let ratio = (zoomed * 0.5f32).tan() / (normal * 0.5f32).tan();
+        assert!((full - ratio).abs() < 1e-6 && full < 0.3);
+        // half the strength is halfway between the plain and the matched turn
+        assert!((look_scale(zoomed, normal, 0.5) - (1.0 + ratio) * 0.5).abs() < 1e-6);
+        // off, unzoomed, wider than normal, or nonsense: the plain turn
+        assert_eq!(look_scale(zoomed, normal, 0.0), 1.0);
+        assert_eq!(look_scale(normal, normal, 1.0), 1.0);
+        assert_eq!(look_scale(2.0, normal, 1.0), 1.0);
+        assert_eq!(look_scale(f32::NAN, normal, 1.0), 1.0);
+        assert_eq!(look_scale(zoomed, normal, f32::NAN), 1.0);
+        assert_eq!(look_scale(zoomed, 0.0, 1.0), 1.0);
+        // a tiny angle never freezes the view
+        assert!(look_scale(0.001, normal, 1.0) > 0.0199);
     }
 
     #[test]

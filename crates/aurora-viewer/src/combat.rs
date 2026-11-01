@@ -30,6 +30,8 @@ pub(crate) struct Settings {
     pub marker_color: [u8; 4],
     pub marker_opacity: f32,
     pub marker_seconds: f32,
+    /// Mouselook turn follows the zoom: 0 (off) to 1 (same on-screen speed as unzoomed).
+    pub zoom_sensitivity: f32,
     pub feed: bool,
     pub feed_position: [f32; 2],
     pub feed_size: f32,
@@ -60,6 +62,7 @@ impl Default for Settings {
             marker_color: [255, 255, 255, 230],
             marker_opacity: 1.0,
             marker_seconds: 0.25,
+            zoom_sensitivity: 0.0,
             feed: false,
             feed_position: [0.98, 0.35],
             feed_size: 14.0,
