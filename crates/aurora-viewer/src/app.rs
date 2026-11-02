@@ -1815,7 +1815,12 @@ impl App {
                     self.world.system_message(aurora_i18n::tr!("app-demo-touch-start-simulated"));
                 }
                 NetCommand::ObjectGrabUpdate { surface, .. } => {
-                    log::info!("demo touch / grab update: face={}, uv={:?}", surface.face, surface.uv);
+                    log::info!(
+                        "demo touch / grab update: face={}, uv={:?}, st={:?}",
+                        surface.face,
+                        surface.uv,
+                        surface.st
+                    );
                 }
                 NetCommand::ObjectRelease { local_id, surface, .. } => {
                     log::info!("demo touch_end: prim={local_id}, face={}", surface.face);
@@ -4098,8 +4103,11 @@ impl App {
                         Action::LensZoomOut => Some(1.2),
                         _ => None,
                     };
-                    self.settings.camera.fov =
-                        crate::camera::zoom_lens(self.settings.camera.fov, factor, aspect, self.world.rlva.camera_fov_limits(aspect));
+                    let current = self.camera.flycam.as_ref().map_or(self.settings.camera.fov, |flight| flight.fov);
+                    self.settings.camera.fov = crate::camera::zoom_lens(current, factor, aspect, self.world.rlva.camera_fov_limits(aspect));
+                    if let Some(flight) = &mut self.camera.flycam {
+                        flight.set_fov(self.settings.camera.fov);
+                    }
                     if !self.demo {
                         self.settings.save();
                     }
@@ -4321,7 +4329,8 @@ impl App {
             self.scene
                 .action_point(&self.world, ray, depth, self.build.open, self.settings.draw_distance)
         };
-        // a rigged mesh or a worn mesh shown there: the GPU alone poses it
+        // a rigged mesh, a worn mesh or a worn prim with an action shown
+        // there: what the GPU drew at the click (scene/drawn.rs)
         let shown = (!alt)
             .then(|| self.designate(crate::scene::drawn::Gesture::Touch, &picked, hit))
             .flatten();
@@ -4377,10 +4386,11 @@ impl App {
                     .map(|o| (o.key.local_id, o.click_action))
             );
         }
-        // the click acts on the rigged mesh it lands on, as on any object:
-        // also one we wear, like the scripted attachments Firestorm lets
-        // us touch (its rigged ones are out of the left click's reach);
-        // one without an action is not designated, the click went on behind
+        // the click acts on the rigged mesh or worn object it lands on, as on
+        // any object: also one we wear, like the scripted attachments the
+        // Legacy Viewer lets us touch (its rigged ones are out of the left
+        // click's reach); one without an action is not designated, the
+        // click went on behind
         if !alt
             && !self.ctrl
             && !self.shift
@@ -6086,6 +6096,9 @@ impl App {
             if mode.starts_with("pay-menu") || mode.starts_with("pay-linked-menu") {
                 self.on_ctx_action(ui::context::CtxAction::Pay(crate::demo::action_id(id)));
                 log::info!("demo menu payment: prim={id}, dialog={}", self.interactions.dialog.is_some());
+            } else if mode.starts_with("buy-touch-menu") {
+                self.on_ctx_action(ui::context::CtxAction::Buy(crate::demo::action_id(id)));
+                log::info!("demo menu purchase: prim={id}, dialog={}", self.interactions.dialog.is_some());
             } else if mode.ends_with("-build") {
                 self.build.open_build(crate::build::Tool::Edit);
                 self.click(click_pick::Click::Build);
@@ -6114,11 +6127,15 @@ impl App {
                 .interactions
                 .confirm(&self.world, (id == 972 || mode.starts_with("pay-linked-menu")).then_some(10))
         {
-            if let NetCommand::PayObject { object, .. } = &cmd {
-                log::info!(
+            match &cmd {
+                NetCommand::PayObject { object, .. } => log::info!(
                     "demo payment confirmed: clicked={id}, object={object}, dialog={}",
                     self.interactions.dialog.is_some()
-                );
+                ),
+                NetCommand::BuyObject { local_id, price, .. } => {
+                    log::info!("demo purchase confirmed: clicked={id}, prim={local_id}, price={price}")
+                }
+                _ => {}
             }
             self.send(cmd);
         }
@@ -10151,7 +10168,7 @@ impl App {
         if let Some(drop) = library_drop {
             self.apply_texture_library_drop(drop);
         }
-        self.update_object_hold(&gfx.renderer);
+        self.update_object_hold(&mut gfx.renderer);
         if let Some(url) = self.interactions.media_url.take() {
             if self.demo {
                 log::info!("demo open media: external browser request simulated");
@@ -12419,10 +12436,15 @@ impl App {
         if let Some(act) = a.ctx_action {
             self.on_ctx_action(act);
         }
-        if let Some(amount) = a.object_confirm
-            && let Some(cmd) = self.interactions.confirm(&self.world, amount)
-        {
-            self.send(cmd);
+        if let Some(amount) = a.object_confirm {
+            if let Some(cmd) = self.interactions.confirm(&self.world, amount) {
+                self.send(cmd);
+            } else if let Some(missing) = self.interactions.take_shortfall() {
+                // give_money: LLFloaterBuyCurrency::buyCurrency for the missing L$
+                log::info!("object payment or purchase short of L$ {missing}: Buy L$ opened");
+                self.open_buy_currency();
+                self.buy_currency_ui.set_amount(missing);
+            }
         }
         if let Some((old, new)) = a.set_display_name {
             self.send(NetCommand::SetDisplayName { old, new });
@@ -13739,7 +13761,7 @@ impl App {
             self.world.set_maturity_preference(maturity);
         }
         if !open {
-            self.options_ui.capture = None;
+            self.options_ui.cancel_capture();
         }
         if res.clear_cache {
             self.disk_cache.clear();
@@ -16574,6 +16596,9 @@ impl ApplicationHandler for App {
         // the GPU of Preferences › Graphics; AURORA_GPU=<number|name|auto>
         // overrides it for this launch (adapter_choice.rs)
         let gpu = std::env::var("AURORA_GPU").unwrap_or_else(|_| self.settings.gpu_adapter.clone());
+        // the pipelines the driver compiled at the earlier starts, kept in
+        // the cache folder (aurora-render's pipeline_cache.rs)
+        aurora_render::pipeline_cache::configure(crate::settings::cache_dir().join("pipelines"), aurora_version::version());
         // AURORA_GPU_START_FAIL=1: as if no card could draw, to see the
         // message the user gets then (graphics_start.rs)
         let created = if std::env::var_os("AURORA_GPU_START_FAIL").is_some() {
@@ -19159,6 +19184,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Focused(false) => {
                 self.tactical_press = None;
+                self.options_ui.cancel_joystick_capture();
                 self.alt_codes.reset();
                 self.chat_ui.cancel_gesture_key();
                 self.gesture_state.manager.release(None);
@@ -19242,6 +19268,13 @@ impl ApplicationHandler for App {
                         crate::keybinds::learn(code, s);
                     }
                     // shortcut being captured in the preferences
+                    if self.options_ui.joystick_capturing() {
+                        self.down.remove(&Input::key(code));
+                        if pressed && code == KeyCode::Escape {
+                            self.options_ui.cancel_capture();
+                        }
+                        return;
+                    }
                     if self.options_ui.capture.is_some() {
                         if let Some(input) = self.options_ui.capture_key(code, pressed, ke.repeat) {
                             self.finish_capture(input);
