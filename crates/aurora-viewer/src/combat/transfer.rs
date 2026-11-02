@@ -24,6 +24,8 @@ pub(crate) struct Inbox {
     pending: BTreeMap<(Uuid, Uuid), Pending>,
     completed: BTreeMap<(Uuid, Uuid), Instant>,
     pub previews: Vec<MarkerSet>,
+    /// The sender of each preview, by set id.
+    pub senders: BTreeMap<Uuid, Uuid>,
 }
 pub(crate) fn encode(name: String, markers: Vec<Marker>) -> Result<Vec<String>, ()> {
     if markers.len() > 256 || markers.iter().any(|m| !m.valid()) || name.len() > 128 {
@@ -112,6 +114,7 @@ impl Inbox {
             return Err(());
         }
         self.completed.insert(key, now);
+        self.senders.insert(set.id, sender);
         self.previews.push(set);
         Ok(())
     }

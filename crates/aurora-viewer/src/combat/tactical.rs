@@ -125,30 +125,97 @@ pub(crate) struct Ping {
     pub sharing: super::pings::ShareState,
 }
 
+/// A resident the viewer knows the place of (Sharing, avatar colours).
+pub(crate) struct Nearby {
+    pub id: Uuid,
+    pub name: String,
+    /// Metres from us; None outside a region.
+    pub distance: Option<f32>,
+    /// Only the coarse location is known (no height).
+    pub approximate: bool,
+}
+
+/// The active group, and its members once their list has arrived.
+pub(crate) struct ActiveGroup {
+    pub name: String,
+    pub members: Option<std::collections::BTreeSet<Uuid>>,
+}
+
 /// Read-only world data for Preferences; no live world borrow crosses a row.
 #[derive(Default)]
 pub(crate) struct Context {
-    position: Option<[f64; 3]>,
-    players: Vec<(Uuid, String)>,
-    groups: Vec<(Uuid, String)>,
-    identities: BTreeMap<Uuid, String>,
+    pub position: Option<[f64; 3]>,
+    pub groups: Vec<(Uuid, String)>,
+    pub identities: BTreeMap<Uuid, String>,
+    /// The residents around us, nearest first.
+    pub nearby: Vec<Nearby>,
+    pub active_group: Option<ActiveGroup>,
+    /// Names of the teammates, coloured residents and senders not around.
+    pub names: BTreeMap<Uuid, String>,
 }
 impl Context {
-    pub fn from_world(world: &World, pings: &[Ping]) -> Self {
+    pub fn from_world(world: &World, cfg: &Settings) -> Self {
         let (x, y) = crate::ui::minimap::to_global(world, world.agent.position);
+        let me = [x, y, world.agent.position.z as f64];
+        let avatars = crate::ui::minimap::avatars(world);
+        let mut nearby: Vec<Nearby> = avatars
+            .iter()
+            .map(|(id, pos, known)| {
+                let (gx, gy) = crate::ui::minimap::to_global(world, *pos);
+                let flat = (gx - me[0]).hypot(gy - me[1]);
+                let distance = if *known { flat.hypot(pos.z as f64 - me[2]) } else { flat };
+                Nearby {
+                    id: *id,
+                    name: world.social.display_name_of(id),
+                    distance: world.main_region.map(|_| distance as f32),
+                    approximate: !known,
+                }
+            })
+            .collect();
+        nearby.sort_by(|a, b| a.distance.unwrap_or(f32::MAX).total_cmp(&b.distance.unwrap_or(f32::MAX)));
+        let active = world.groups.active;
+        let active_group = world
+            .groups
+            .groups
+            .iter()
+            .find(|g| g.id == active && !active.is_nil())
+            .map(|g| ActiveGroup {
+                name: g.name.clone(),
+                members: world
+                    .group_data
+                    .get(&g.id)
+                    .filter(|d| d.members_complete)
+                    .map(|d| d.members.keys().copied().collect()),
+            });
+        let names = cfg
+            .recipients
+            .keys()
+            .chain(cfg.player_colors.keys())
+            .chain(cfg.inbox.senders.values())
+            .map(|id| (*id, world.social.display_name_of(id)))
+            .collect();
         Self {
-            position: world.main_region.map(|_| [x, y, world.agent.position.z as f64]),
-            players: crate::ui::minimap::avatars(world)
-                .into_iter()
-                .map(|(id, _, _)| (id, world.social.display_name_of(&id).to_owned()))
-                .collect(),
+            position: world.main_region.map(|_| me),
             groups: world.groups.groups.iter().map(|g| (g.id, g.name.clone())).collect(),
-            identities: pings
+            identities: cfg
+                .pings
                 .iter()
                 .flat_map(|p| std::iter::once(p.sender).chain(p.responders.iter().copied()))
                 .map(|id| (id, world.social.name_of(&id)))
                 .collect(),
+            nearby,
+            active_group,
+            names,
         }
+    }
+    /// A resident's name, around us or not.
+    pub fn name_of(&self, id: &Uuid) -> String {
+        self.nearby
+            .iter()
+            .find(|n| n.id == *id)
+            .map(|n| n.name.clone())
+            .or_else(|| self.names.get(id).cloned())
+            .unwrap_or_else(|| "…".into())
     }
 }
 
@@ -189,6 +256,9 @@ pub(crate) struct Settings {
     pub ping_audience: u8,
     #[serde(skip)]
     pub set_outgoing: std::collections::VecDeque<String>,
+    /// Parts queued since the queue was last empty (Sharing's progress).
+    #[serde(skip)]
+    pub set_total: usize,
     #[serde(skip)]
     pub last_set_send: Option<Instant>,
     #[serde(skip)]
@@ -267,6 +337,7 @@ impl Default for Settings {
             receive_enabled: true,
             ping_audience: 0,
             set_outgoing: Default::default(),
+            set_total: 0,
             last_set_send: None,
             inbox: Default::default(),
             share_group: false,
@@ -348,6 +419,34 @@ pub(crate) fn world_overlay(
 impl Settings {
     pub fn available(&self) -> bool {
         self.tools_enabled && self.combat_enabled
+    }
+    /// The active set's name in this region.
+    pub fn active_set_name(&self) -> String {
+        self.current_region
+            .as_ref()
+            .and_then(|key| self.library.regions.iter().find(|r| &r.key == key))
+            .and_then(|r| r.selected())
+            .map(|s| s.name.clone())
+            .unwrap_or_default()
+    }
+    /// Queues the active set's markers (`selected_only`: the selected ones)
+    /// for the recipients; `share_error` when it cannot.
+    pub fn send_markers(&mut self, selected_only: bool) {
+        if !self.available() || !self.share || !self.send_enabled {
+            return;
+        }
+        let markers = self.markers.iter().filter(|m| !selected_only || m.selected).cloned().collect();
+        match super::transfer::encode(self.active_set_name(), markers) {
+            Ok(chunks) if self.set_outgoing.len() + chunks.len() <= 512 => {
+                if self.set_outgoing.is_empty() {
+                    self.set_total = 0;
+                }
+                self.set_total += chunks.len();
+                self.set_outgoing.extend(chunks);
+                self.share_error = false;
+            }
+            _ => self.share_error = true,
+        }
     }
     pub fn enter_region(&mut self, key: super::sets::RegionKey, name: &str) {
         if self.current_region.as_ref() == Some(&key) {
@@ -629,38 +728,104 @@ pub(crate) fn hatch(painter: &egui::Painter, polygon: &[egui::Pos2], color: Colo
     }
 }
 
-pub(crate) fn panel(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut Settings, page: usize) {
-    if page == 3 {
-        widgets::switch_labeled(ui, p, &mut cfg.tools_enabled, tr!("tactical-tools"));
-        widgets::switch_labeled(ui, p, &mut cfg.fixed_center, tr!("tactical-fixed-center"));
-        widgets::switch_labeled(ui, p, &mut cfg.rotate_avatar, tr!("tactical-rotate-avatar"));
-        widgets::switch_labeled(ui, p, &mut cfg.dots_enabled, tr!("tactical-dots-enabled"));
-        ui.add(egui::Slider::new(&mut cfg.dot_scale, 0.5..=3.0).text(tr!("tactical-dots")));
-        ui.add(egui::Slider::new(&mut cfg.outline_width, 0.0..=4.0).text(tr!("tactical-outline")));
-        widgets::color_button(ui, p, "tactical-outline", &mut cfg.outline, false);
-        widgets::collapsing(ui, p, "minimap-colors", tr!("tactical-player-color"), false, |ui| {
-            for (id, name) in &context.groups {
-                if let Some(c) = cfg.group_colors.get_mut(id) {
-                    ui.horizontal(|ui| {
-                        ui.label(name);
-                        widgets::color_button(ui, p, id, c, false);
-                    });
-                } else if ui.button(name).clicked() {
-                    cfg.group_colors.insert(*id, cfg.colors[0]);
+/// The colour and icon of one ping kind (Pings tab).
+pub(crate) fn kind_style(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, kind: usize) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        changed |= widgets::color_button(ui, p, ("ping-kind", kind), &mut cfg.colors[kind], false).changed();
+        egui::ComboBox::from_id_salt(("ping-icon", kind))
+            .selected_text(icon_name(&cfg.icons[kind]))
+            .show_ui(ui, |ui| {
+                for icon in [
+                    "map-pin-filled",
+                    "user-filled",
+                    "users-group",
+                    "alert-triangle-filled",
+                    "flag-filled",
+                ] {
+                    if crate::ui::icons::embedded(icon) {
+                        ui.horizontal(|ui| {
+                            if let Some(picture) = crate::ui::icons::global(icon) {
+                                ui.image((picture.id(), egui::Vec2::splat(16.0)));
+                            }
+                            changed |= ui
+                                .selectable_value(&mut cfg.icons[kind], icon.to_owned(), icon_name(icon))
+                                .changed();
+                        });
+                    }
+                }
+            });
+    });
+    changed
+}
+
+/// One line of the avatar colours: its colour (or a button to give it
+/// one), its name and detail, and a button that takes the colour away.
+fn color_line(ui: &mut egui::Ui, p: &Palette, id: Uuid, name: &str, detail: &str, map: &mut BTreeMap<Uuid, [u8; 4]>, default: [u8; 4]) {
+    ui.horizontal(|ui| {
+        match map.get_mut(&id) {
+            Some(c) => {
+                widgets::color_button(ui, p, ("avatar-color", id), c, false);
+            }
+            None => {
+                if widgets::flat_button(ui, p, tr!("tactical-color-set")).clicked() {
+                    map.insert(id, default);
                 }
             }
-            for (id, name) in &context.players {
-                ui.horizontal(|ui| {
-                    ui.label(name);
-                    if let Some(c) = cfg.player_colors.get_mut(id) {
-                        widgets::color_button(ui, p, id, c, false);
-                    } else if ui.button(tr!("tactical-player-color")).clicked() {
-                        cfg.player_colors.insert(*id, cfg.colors[0]);
-                    }
-                });
-            }
-        });
+        }
+        ui.label(name);
+        if !detail.is_empty() {
+            ui.label(egui::RichText::new(detail).size(11.5).color(p.muted));
+        }
+        if map.contains_key(&id) {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::icon_button(ui, p, "x", tr!("tactical-color-remove"), true) {
+                    map.remove(&id);
+                }
+            });
+        }
+    });
+}
+
+/// The avatar colours of the Mini-map tab: the groups, then the residents
+/// with a colour (around or not), then the others around, nearest first.
+pub(crate) fn avatar_colors(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut Settings) -> bool {
+    let before = (cfg.player_colors.clone(), cfg.group_colors.clone());
+    let default = cfg.colors[0];
+    ui.label(egui::RichText::new(tr!("tactical-colors-groups")).size(11.5).color(p.muted));
+    if context.groups.is_empty() {
+        ui.label(egui::RichText::new(tr!("tactical-colors-no-groups")).color(p.muted));
     }
+    for (id, name) in &context.groups {
+        color_line(ui, p, *id, name, "", &mut cfg.group_colors, default);
+    }
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(tr!("tactical-colors-residents")).size(11.5).color(p.muted));
+    let coloured: Vec<Uuid> = cfg.player_colors.keys().copied().collect();
+    for id in &coloured {
+        let around = context.nearby.iter().find(|n| n.id == *id);
+        let detail = around.map_or_else(|| tr!("sharing-away").to_owned(), distance_text);
+        color_line(ui, p, *id, &context.name_of(id), &detail, &mut cfg.player_colors, default);
+    }
+    for n in context.nearby.iter().filter(|n| !coloured.contains(&n.id)) {
+        color_line(ui, p, n.id, &n.name, &distance_text(n), &mut cfg.player_colors, default);
+    }
+    if coloured.is_empty() && context.nearby.is_empty() {
+        ui.label(egui::RichText::new(tr!("tactical-colors-no-residents")).color(p.muted));
+    }
+    before != (cfg.player_colors.clone(), cfg.group_colors.clone())
+}
+
+/// "24 m", or "~120 m" from a coarse location.
+pub(crate) fn distance_text(n: &Nearby) -> String {
+    match n.distance {
+        Some(d) if n.approximate => format!("~{d:.0} m"),
+        Some(d) => format!("{d:.0} m"),
+        None => String::new(),
+    }
+}
+
+pub(crate) fn panel(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut Settings, page: usize) {
     if page == 4 {
         sets_panel(ui, p, cfg);
         widgets::switch_labeled(ui, p, &mut cfg.editing, tr!("tactical-edit"));
@@ -676,61 +841,6 @@ pub(crate) fn panel(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut
         widgets::switch_labeled(ui, p, &mut cfg.enabled, tr!("tactical-markers"));
         widgets::switch_labeled(ui, p, &mut cfg.labels, tr!("tactical-labels"));
         ui.add(egui::Slider::new(&mut cfg.size, 3.0..=32.0).text(tr!("combat-size")));
-    }
-    if page == 5 {
-        ui.label(tr!("ping-gesture-help"));
-        widgets::switch_labeled(ui, p, &mut cfg.pings_enabled, tr!("tactical-pings"));
-        super::ping_ui::active(ui, p, cfg, &context.identities);
-        widgets::switch_labeled(ui, p, &mut cfg.auto_contact, tr!("ping-auto-contact"));
-        widgets::switch_labeled(ui, p, &mut cfg.double_tap, tr!("ping-double-tap"));
-        widgets::switch_labeled(ui, p, &mut cfg.aim_fade, tr!("ping-aim-fade"));
-        widgets::switch_labeled(ui, p, &mut cfg.offscreen_pings, tr!("tactical-offscreen-pings"))
-            .on_hover_text(tr!("tactical-offscreen-pings-help"));
-        widgets::switch_labeled(ui, p, &mut cfg.distances, tr!("tactical-distances"));
-        ui.label(tr!("tactical-cooldown"));
-        let remaining = cfg.last_ping.map(|at| (3.0 - at.elapsed().as_secs_f32()).max(0.0)).unwrap_or(0.0);
-        ui.label(format!("{remaining:.1} s"));
-        ui.add(egui::Slider::new(&mut cfg.seconds, 1.0..=60.0).text(tr!("combat-duration")));
-        if ui
-            .button(crate::keybinds::Input::Key(cfg.key.clone()).label())
-            .on_hover_text(tr!("tactical-key"))
-            .clicked()
-        {
-            cfg.capture_key = true;
-        }
-        ui.add(egui::Slider::new(&mut cfg.hold_ms, 150.0..=800.0).text(tr!("tactical-hold")));
-        for (kind, c) in cfg.colors.iter_mut().enumerate() {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(kind_name(kind));
-                widgets::color_button(ui, p, kind, c, false);
-                egui::ComboBox::from_id_salt(("ping-icon", kind))
-                    .selected_text(icon_name(&cfg.icons[kind]))
-                    .show_ui(ui, |ui| {
-                        for icon in [
-                            "map-pin-filled",
-                            "user-filled",
-                            "users-group",
-                            "alert-triangle-filled",
-                            "flag-filled",
-                        ] {
-                            if crate::ui::icons::embedded(icon) {
-                                ui.horizontal(|ui| {
-                                    if let Some(picture) = crate::ui::icons::global(icon) {
-                                        ui.image((picture.id(), egui::Vec2::splat(16.0)));
-                                    }
-                                    ui.selectable_value(&mut cfg.icons[kind], icon.to_owned(), icon_name(icon));
-                                });
-                            }
-                        }
-                    });
-            });
-        }
-        widgets::switch_labeled(ui, p, &mut cfg.ping_sound, tr!("tactical-sound"));
-        ui.text_edit_singleline(&mut cfg.sound_asset);
-        ui.add(egui::Slider::new(&mut cfg.sound_volume, 0.0..=1.0).text(tr!("combat-volume")));
-        if cfg.share_error {
-            ui.colored_label(p.warn, tr!("tactical-share-error"));
-        }
     }
     if page == 4 {
         if ui
@@ -838,87 +948,6 @@ pub(crate) fn panel(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut
             cfg.markers.remove(i);
         }
         cfg.save_set();
-    }
-    if page == 6 {
-        widgets::collapsing(ui, p, "sharing", tr!("tactical-sharing"), true, |ui| {
-            widgets::switch_labeled(ui, p, &mut cfg.share, tr!("tactical-share"));
-            widgets::switch_labeled(ui, p, &mut cfg.send_enabled, tr!("tactical-send-enabled"));
-            widgets::switch_labeled(ui, p, &mut cfg.receive_enabled, tr!("tactical-receive-enabled"));
-            ui.label(tr!("tactical-ping-sharing"));
-            for (value, label) in [tr!("tactical-local"), tr!("tactical-selected"), tr!("tactical-active-group")]
-                .into_iter()
-                .enumerate()
-            {
-                widgets::radio_value(ui, p, &mut cfg.ping_audience, value as u8, label);
-            }
-            widgets::switch_labeled(ui, p, &mut cfg.share_group, tr!("tactical-share-group"));
-            for (id, name) in &context.players {
-                let on = cfg.recipients.entry(*id).or_default();
-                widgets::switch_labeled(ui, p, on, name);
-            }
-            if cfg.share_error {
-                ui.label(tr!("tactical-share-error"));
-            }
-            let mut send = None;
-            let can_send = cfg.available() && cfg.share && cfg.send_enabled && (cfg.share_group || cfg.recipients.values().any(|on| *on));
-            if ui
-                .add_enabled(
-                    can_send && cfg.markers.iter().any(|m| m.selected),
-                    egui::Button::new(tr!("tactical-send")),
-                )
-                .clicked()
-            {
-                send = Some(true);
-            }
-            if ui.add_enabled(can_send, egui::Button::new(tr!("tactical-send-set"))).clicked() {
-                send = Some(false);
-            }
-            if let Some(selection) = send
-                && cfg.available()
-                && cfg.share
-                && cfg.send_enabled
-            {
-                let name = cfg
-                    .current_region
-                    .as_ref()
-                    .and_then(|key| cfg.library.regions.iter().find(|r| &r.key == key))
-                    .and_then(|r| r.selected())
-                    .map(|s| s.name.clone())
-                    .unwrap_or_default();
-                let markers = cfg.markers.iter().filter(|m| !selection || m.selected).cloned().collect();
-                match super::transfer::encode(name, markers) {
-                    Ok(chunks) if cfg.set_outgoing.len() + chunks.len() <= 512 => {
-                        cfg.set_outgoing.extend(chunks);
-                        cfg.share_error = false;
-                    }
-                    _ => cfg.share_error = true,
-                }
-            }
-            let mut remove = None;
-            for (index, set) in cfg.inbox.previews.iter().enumerate() {
-                widgets::surface(ui, p, |ui| {
-                    ui.label(&set.name);
-                    for marker in &set.markers {
-                        ui.label(format!("{} · {}", marker.name, marker.shape().label()));
-                    }
-                    if ui.button(tr!("tactical-import-copy")).clicked()
-                        && let Some(key) = &cfg.current_region
-                    {
-                        let region = cfg.library.region_mut(key, "");
-                        let active = region.active;
-                        region.add(set.name.clone(), &set.markers);
-                        region.active = active;
-                        remove = Some(index);
-                    }
-                    if ui.button(tr!("tactical-remove")).clicked() {
-                        remove = Some(index);
-                    }
-                });
-            }
-            if let Some(index) = remove {
-                cfg.inbox.previews.remove(index);
-            }
-        });
     }
 }
 

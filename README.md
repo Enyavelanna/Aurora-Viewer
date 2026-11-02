@@ -24,23 +24,23 @@ Everything lives in one native window: **Me > Advanced > Combat**. Nothing is ad
 - **DAMAGE events are deliberately ignored.** They never play a sound, marker or award.
 
 ### Kill feedback
-- **Kill confirmation marker**: a short cross at the centre of the screen on your own confirmed kill (size, colour, opacity, duration).
+- **Kill marker**: a short cross at the centre of the screen on your own confirmed kill (size, colour, opacity, duration).
 - **Kill sound**: an optional sound (any asset UUID) with its own volume.
 - **Kill feed**: an on-screen list of recent eliminations (position, size, opacity, lifetime, count).
 
 ### Awards, announcements and medals
 - **Multikills** within 5 seconds: First, Double, Triple, Multi, Ultra.
-- **Life streaks** without dying: 5, 10, 15, 20, 30.
+- **Kill streaks** without dying: 5, 10, 15, 20, 30.
 - **Rivalry**: Revenge, Dominating, Comeback.
 - One optional announcement sound per award, and an animated **medal banner** with an optional image.
-- A **reward studio** to set the sound and image of every award, read its trigger rule and preview it.
+- An **award studio** to set the sound and image of every award, read its trigger rule and preview it.
 
-### Combat journal
-- A **Combat tab** in Conversations (can be hidden) with Global and Personal views.
-- The whole session is kept in memory, with an optional background writer that saves a JSONL file per session. **Clear journal** moves the file to a recoverable `trash` folder.
+### Combat log
+- A **Combat tab** in Conversations (can be hidden) with All and Mine views.
+- The whole session is kept in memory, with an optional background writer that saves a JSONL file per session. **Clear log** moves the file to a recoverable `trash` folder.
 
 ### Tactical pings
-- **Hold-to-ping wheel** with four sectors (Contact, Objective, Need Help / Regroup, Default Ping). A tap places the default ping. Works in mouselook and out of it.
+- **Hold-to-ping wheel** with four sectors (Contact, Objective, Help / Regroup, Ping). A tap places a plain ping. Works in mouselook and out of it.
 - The ping lands on the nearest surface or terrain along your aim, ignoring your own avatar and worn equipment.
 - Others can acknowledge ("On my way") and you can cancel your ping. A three-second cooldown limits spam.
 - **Off-screen guidance**: pings outside the view are drawn around the screen edge, grouped by bearing.

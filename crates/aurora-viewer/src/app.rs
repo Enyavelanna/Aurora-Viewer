@@ -13666,8 +13666,7 @@ impl App {
         self.options_ui.flycam_active = self.joystick.active;
         if open && (self.options_ui.page == ui::options::Page::Combat || !self.options_ui.query.is_empty() || self.options_ui.modified_view)
         {
-            self.options_ui.tactical_context =
-                crate::combat::tactical::Context::from_world(&self.world, &self.settings.maps.tactical.pings);
+            self.options_ui.tactical_context = crate::combat::tactical::Context::from_world(&self.world, &self.settings.maps.tactical);
         }
         let before_camera = self.settings.camera.clone();
         let mut res = ui::options::show(ctx, p, &self.skin.icons, &mut self.settings, &mut self.options_ui, &mut open);
@@ -16224,8 +16223,14 @@ impl App {
                             .editor_images(&ctx, &self.world, &mut self.map_tiles, &self.settings.maps);
                         self.combat_window.map_images(images);
                     }
-                    self.combat_window
-                        .show(&ctx, &p, &mut self.settings, &self.world, &self.ui_images, &mut self.panels.combat)
+                    let result =
+                        self.combat_window
+                            .show(&ctx, &p, &mut self.settings, &self.world, &self.ui_images, &mut self.panels.combat);
+                    // The Sharing tab shows who is in the active group.
+                    if self.panels.combat && self.combat_window.tab == 6 {
+                        self.world.group_data.ensure_members(self.world.groups.active);
+                    }
+                    result
                 };
                 if let Some(slot) = combat_result.combat_preview
                     && let Some(&award) = crate::combat::awards::Award::ALL.get(slot)

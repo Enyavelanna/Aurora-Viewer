@@ -16,6 +16,7 @@ pub mod blacklist;
 pub mod bumps;
 pub(crate) mod combat_editor;
 pub(crate) mod combat_rewards;
+pub(crate) mod combat_sharing;
 pub(crate) mod combat_window;
 pub mod sound_explorer;
 // Bug report form (disabled, see main.rs):

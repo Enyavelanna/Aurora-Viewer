@@ -36,7 +36,7 @@ impl CombatWindow {
             self.editor.show(ctx, p, &mut settings.maps.tactical, world);
             return result;
         }
-        self.controls.tactical_context = crate::combat::tactical::Context::from_world(world, &settings.maps.tactical.pings);
+        self.controls.tactical_context = crate::combat::tactical::Context::from_world(world, &settings.maps.tactical);
         self.controls.combat_medal_images.clear();
         for asset in &settings.combat.medal_textures {
             if let Ok(id) = uuid::Uuid::parse_str(asset)
@@ -57,7 +57,7 @@ impl CombatWindow {
                         ui.set_width(170.0);
                         for (tab, (icon, label)) in [
                             ("layout-dashboard-filled", tr!("monitor-tab-overview")),
-                            ("crosshair", tr!("combat-title")),
+                            ("crosshair", tr!("combat-page-feedback")),
                             ("star-filled", tr!("combat-page-rewards")),
                             ("world-filled", tr!("combat-page-minimap")),
                             ("map-pin-filled", tr!("combat-page-sets")),

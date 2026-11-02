@@ -352,6 +352,7 @@ const UNDO_SECONDS: f64 = 8.0;
 pub struct OptionsUi {
     saved_graphics: saved_graphics::Editor,
     pub(crate) tactical_context: crate::combat::tactical::Context,
+    pub(crate) combat_sharing: crate::ui::combat_sharing::View,
     pub(crate) combat_reward_selected: usize,
     pub(crate) combat_medal_images: HashMap<uuid::Uuid, egui::TextureHandle>,
     pub current_parcel: Option<crate::world::parcel_visibility::Entry>,
