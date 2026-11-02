@@ -28,14 +28,8 @@ pub const WINDOW: &str = "preferences";
 
 /// Reuse the preference row engine, including native cogs, in Combat's floater.
 pub(crate) fn combat_controls(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, tab: usize) -> OptionsResult {
-    let d = Settings::default();
     let mut r = OptionsResult::default();
-    for mode in [Mode::Count, Mode::Show] {
-        let mut cx = Cx::new(ui, *p, s, &d, st, &mut r, mode, "");
-        cx.enter(Page::Combat, tab);
-        pages::combat::page(&mut cx, tab);
-        r.changed |= cx.changed;
-    }
+    r.changed |= super::combat_pages::show(ui, p, s, st, &mut r, tab);
     r
 }
 

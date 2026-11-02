@@ -2014,6 +2014,7 @@ pub fn run_command(ctx: &egui::Context, cmd: &str, panels: &mut Panels) -> BarAc
         "assetblacklist" => toggle(super::blacklist::WINDOW, &mut panels.asset_blacklist),
         "gridstatus" => toggle(super::grid_status::WINDOW, &mut panels.grid_status),
         "performance" => toggle("perf", &mut panels.perf),
+        "combat" => toggle(super::combat_window::WINDOW, &mut panels.combat),
         "snapshot" => toggle(super::snapshot::WINDOW, &mut panels.snapshot),
         "preferences" => toggle("options", &mut panels.settings),
         // Firestorm's Move and View buttons open the controls
@@ -2084,6 +2085,7 @@ fn command_active(cmd: &str, panels: &Panels, flying: bool, seated: bool, mousel
         "assetblacklist" => panels.asset_blacklist,
         "gridstatus" => panels.grid_status,
         "performance" => panels.perf,
+        "combat" => panels.combat,
         "snapshot" => panels.snapshot,
         "preferences" => panels.settings,
         "move" => panels.movement_controls,
@@ -3488,6 +3490,7 @@ mod tests {
             ("soundexplorer", super::super::sound_explorer::WINDOW, |p| p.sound_explorer),
             ("assetblacklist", super::super::blacklist::WINDOW, |p| p.asset_blacklist),
             ("gridstatus", super::super::grid_status::WINDOW, |p| p.grid_status),
+            ("combat", super::super::combat_window::WINDOW, |p| p.combat),
         ] {
             run_command(&ctx, cmd, &mut panels);
             if !open(&panels) {

@@ -1,13 +1,14 @@
 //! The Sharing tab of the Combat window: who receives your pings and marker
 //! sets, whom you accept them from, what is on its way and what arrived.
 //! The rules themselves live in `app/bridge.rs`; this page only shows them.
+use super::combat_cards::{badge, muted, notice, pill};
 use crate::{
     combat::tactical::{Context, Settings, distance_text},
     theme::Palette,
     ui::widgets,
 };
 use aurora_i18n::tr;
-use egui::{Color32, RichText, Vec2, vec2};
+use egui::{RichText, Vec2, vec2};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
@@ -108,36 +109,6 @@ fn title(ui: &mut egui::Ui, p: &Palette, icon: &str, text: &str, count: Option<u
             badge(ui, p, &n.to_string(), p.violet);
         }
     });
-}
-
-fn muted(ui: &mut egui::Ui, p: &Palette, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).size(11.5).color(p.muted)).wrap());
-}
-
-fn notice(ui: &mut egui::Ui, p: &Palette, text: &str) {
-    widgets::surface(ui, p, |ui| {
-        ui.set_width(ui.available_width());
-        ui.label(RichText::new(text).color(p.warn));
-    });
-}
-
-/// A small rounded label.
-fn badge(ui: &mut egui::Ui, p: &Palette, text: &str, color: Color32) {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text.to_owned(), egui::FontId::proportional(11.0), p.ink);
-    let (rect, _) = ui.allocate_exact_size(galley.size() + vec2(12.0, 4.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, rect.height() / 2.0, color.gamma_multiply(0.25));
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, p.ink);
-}
-
-/// A switch drawn as a pill with a state dot: Sending, Receiving.
-fn pill(ui: &mut egui::Ui, p: &Palette, on: &mut bool, text: &str, tip: &str) {
-    let color = if *on { p.success } else { p.muted_dim };
-    let label = RichText::new(format!("● {text}")).color(color);
-    if ui.selectable_label(*on, label).on_hover_text(tip).clicked() {
-        *on = !*on;
-    }
 }
 
 fn header(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) {
@@ -391,7 +362,7 @@ fn group_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Cont
 fn send_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) {
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
-        title(ui, p, "send", tr!("sharing-send-title"), None);
+        title(ui, p, "send-filled", tr!("sharing-send-title"), None);
         let name = cfg.active_set_name();
         let selected = cfg.markers.iter().filter(|m| m.selected).count();
         muted(
@@ -421,7 +392,7 @@ fn send_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Conte
             if widgets::action_button_if(
                 ui,
                 p,
-                "send",
+                "send-filled",
                 tr!("tactical-send"),
                 widgets::ActionKind::Primary,
                 size,
@@ -511,7 +482,7 @@ fn inbox_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Cont
                     let save = widgets::action_button_if(
                         ui,
                         p,
-                        "download",
+                        "download-filled",
                         tr!("tactical-import-copy"),
                         widgets::ActionKind::Primary,
                         vec2(0.0, 26.0),

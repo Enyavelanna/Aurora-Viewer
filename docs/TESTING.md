@@ -51,7 +51,7 @@ screen feed and tactical map in memory. No grid login or scripted upload is
 performed. Inspect the All/Mine combat log and French, English and Japanese
 labels. Me > Advanced > Combat holds every switch and configuration;
 `AURORA_DEMO_OPTIONS=combat` opens the overview. Suffixes /1 through /6 select
-Feedback, Awards, Mini-map, Marker sets, Pings, and Sharing respectively.
+Feedback, Awards, Mini-map, Marker sets, Pings, and Sharing respectively. The Combat toolbar button (command `combat`) opens and closes the window.
 Use `/editor` to capture the separate region canvas. Draw all four marker shapes,
 move a selection, change its properties, undo, cancel a drag with Escape, switch
 sets and verify the same annotations on the minimap. Check the medal over a bright

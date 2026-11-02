@@ -700,20 +700,30 @@ fn combat_preferences_are_hidden_and_reset_without_erasing_annotations() {
 }
 
 #[test]
-fn tactical_preferences_keep_the_controls_visible_and_stack_them_vertically() {
+fn combat_pages_keep_the_controls_visible_and_every_tab_draws() {
+    let p = crate::theme::Theme::default().palette();
     let mut frames = Frames::new();
     let (mut s, mut st, mut r) = (Settings::default(), OptionsUi::default(), OptionsResult::default());
-    let mut texts = Vec::new();
-    for _ in 0..5 {
-        texts = page_frame(&mut frames, &mut s, &mut st, &mut r, Page::Combat, 5, Vec::new());
-    }
-    let pings = texts
-        .iter()
-        .find(|t| t.source == aurora_i18n::tr!("tactical-pings"))
-        .expect("ping toggle")
-        .rect;
+    s.maps.tactical.pings_enabled = true;
     let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 900.0));
-    assert!(viewport.contains_rect(pings), "controls must appear in the visible pane: {pings:?}");
+    for tab in 0..=6 {
+        let mut texts = Vec::new();
+        for _ in 0..5 {
+            texts = frames.run(Vec::new(), |ui| {
+                ui.set_width(700.0);
+                crate::ui::combat_pages::show(ui, &p, &mut s, &mut st, &mut r, tab);
+            });
+        }
+        assert!(!texts.is_empty(), "tab {tab} draws something");
+        if tab == 5 {
+            let pings = texts
+                .iter()
+                .find(|t| t.source == aurora_i18n::tr!("tactical-pings"))
+                .expect("ping toggle")
+                .rect;
+            assert!(viewport.contains_rect(pings), "controls must appear in the visible pane: {pings:?}");
+        }
+    }
 }
 
 /// One frame of the rows of a page's tab, `width` wide, laid out as in the

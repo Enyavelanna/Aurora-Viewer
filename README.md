@@ -13,7 +13,7 @@ Download the latest zip from the [Releases](../../releases) page, unzip it anywh
 
 ## Where everything is
 
-Everything lives in one native window: **Me > Advanced > Combat**. Nothing is added to the other Preferences pages. The master switch **Combat mode** suspends every feature without losing your settings. Interface text is available in English, French and Japanese.
+Everything lives in one native window, opened by the **Combat** toolbar button (shield icon; it is in the default toolbar, and a customised toolbar can add it from the toolbar editor) or from **Me > Advanced > Combat**. Every tab is a dashboard of cards, and a card that differs from its defaults shows a reset button. Nothing is added to the other Preferences pages. The master switch **Combat mode** suspends every feature without losing your settings. Interface text is available in English, French and Japanese.
 
 ## What it adds
 

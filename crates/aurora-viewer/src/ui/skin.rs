@@ -67,6 +67,7 @@ impl Default for Layout {
                 tb("Command_Map_Icon", "worldmap", aurora_i18n::tr!("common-world-map")),
                 tb("Command_MiniMap_Icon", "minimap", aurora_i18n::tr!("common-mini-map")),
                 tb("Command_Performance_Icon", "performance", aurora_i18n::tr!("common-performance")),
+                tb("shield-filled", "combat", aurora_i18n::tr!("combat-title")),
                 tb("groundsit", "sit", aurora_i18n::tr!("extra-sit-on-ground-stand-up")),
                 tb("lock-filled", "movelock", aurora_i18n::tr!("movelock-title")),
                 tb("AO", "ao", aurora_i18n::tr!("ao-title")),

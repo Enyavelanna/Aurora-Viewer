@@ -825,24 +825,29 @@ pub(crate) fn distance_text(n: &Nearby) -> String {
     }
 }
 
-pub(crate) fn panel(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut Settings, page: usize) {
-    if page == 4 {
-        sets_panel(ui, p, cfg);
-        widgets::switch_labeled(ui, p, &mut cfg.editing, tr!("tactical-edit"));
-        ui.horizontal_wrapped(|ui| {
-            for shape in [Shape::Rectangle, Shape::Line] {
-                if ui.button(shape.label()).clicked() {
-                    cfg.enabled = true;
-                    cfg.draw = Some(shape);
-                    cfg.drawing_start = None;
-                }
+/// The markers' look on the map and the drawing tools (Marker sets tab).
+pub(crate) fn marker_display(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) -> bool {
+    let before = (cfg.editing, cfg.enabled, cfg.labels, cfg.size);
+    crate::ui::combat_cards::switch_row(ui, p, &mut cfg.enabled, tr!("tactical-markers"), "");
+    crate::ui::combat_cards::switch_row(ui, p, &mut cfg.labels, tr!("tactical-labels"), "");
+    crate::ui::combat_cards::switch_row(ui, p, &mut cfg.editing, tr!("tactical-edit"), tr!("tactical-edit-help"));
+    crate::ui::combat_cards::slider_row(ui, tr!("combat-size"), "", &mut cfg.size, 3.0..=32.0, "");
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        for shape in [Shape::Rectangle, Shape::Line] {
+            if widgets::flat_button(ui, p, shape.label()).clicked() {
+                cfg.enabled = true;
+                cfg.draw = Some(shape);
+                cfg.drawing_start = None;
             }
-        });
-        widgets::switch_labeled(ui, p, &mut cfg.enabled, tr!("tactical-markers"));
-        widgets::switch_labeled(ui, p, &mut cfg.labels, tr!("tactical-labels"));
-        ui.add(egui::Slider::new(&mut cfg.size, 3.0..=32.0).text(tr!("combat-size")));
-    }
-    if page == 4 {
+        }
+    });
+    before != (cfg.editing, cfg.enabled, cfg.labels, cfg.size)
+}
+
+/// Every marker of the active set, one framed block each (Marker sets tab).
+pub(crate) fn marker_list(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut Settings) {
+    {
         if ui
             .add_enabled(context.position.is_some(), egui::Button::new(tr!("tactical-add")))
             .clicked()
@@ -852,96 +857,100 @@ pub(crate) fn panel(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut
         }
         let mut remove = None;
         for (i, m) in cfg.markers.iter_mut().enumerate() {
+            ui.add_space(6.0);
             ui.push_id(m.id, |ui| {
-                let logical = m.shape().tool();
-                let mut shape = logical;
-                egui::ComboBox::from_id_salt("shape")
-                    .selected_text(shape.label())
-                    .show_ui(ui, |ui| {
-                        for value in Shape::ALL {
-                            ui.selectable_value(&mut shape, value, value.label());
+                widgets::surface(ui, p, |ui| {
+                    ui.set_width(ui.available_width());
+                    let logical = m.shape().tool();
+                    let mut shape = logical;
+                    egui::ComboBox::from_id_salt("shape")
+                        .selected_text(shape.label())
+                        .show_ui(ui, |ui| {
+                            for value in Shape::ALL {
+                                ui.selectable_value(&mut shape, value, value.label());
+                            }
+                        });
+                    if shape != logical {
+                        m.shape = shape;
+                        m.path.clear();
+                        if shape == Shape::Freehand {
+                            m.path = vec![m.position, [m.position[0] + 8.0, m.position[1] + 8.0, m.position[2]]];
                         }
-                    });
-                if shape != logical {
-                    m.shape = shape;
-                    m.path.clear();
-                    if shape == Shape::Freehand {
-                        m.path = vec![m.position, [m.position[0] + 8.0, m.position[1] + 8.0, m.position[2]]];
-                    }
-                    if matches!(shape, Shape::Point | Shape::Circle) {
-                        m.radius = 0.0;
-                        m.end = None;
-                    } else {
-                        m.radius = 0.0;
-                        m.end = Some([m.position[0] + 8.0, m.position[1] + 8.0, m.position[2]]);
-                    }
-                }
-                ui.horizontal(|ui| {
-                    widgets::switch(ui, p, &mut m.selected);
-                    ui.text_edit_singleline(&mut m.name);
-                    if ui.button(tr!("tactical-remove")).clicked() {
-                        remove = Some(i);
-                    }
-                });
-                ui.horizontal(|ui| {
-                    widgets::color_button(ui, p, "color", &mut m.color, false);
-                    if m.shape().tool() == Shape::Circle {
-                        ui.add(egui::Slider::new(&mut m.radius, 0.0..=1024.0).text(tr!("combat-editor-radius")));
-                    }
-                    if m.shape() == Shape::Square
-                        && let Some(end) = m.end
-                    {
-                        let dx = end[0] - m.position[0];
-                        let dy = end[1] - m.position[1];
-                        let mut side = dx.abs().max(dy.abs()).clamp(0.1, 1024.0);
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut side)
-                                    .range(0.1..=1024.0)
-                                    .prefix(tr!("tactical-square-side")),
-                            )
-                            .changed()
-                        {
-                            m.end = Some([
-                                m.position[0] + side * if dx < 0.0 { -1.0 } else { 1.0 },
-                                m.position[1] + side * if dy < 0.0 { -1.0 } else { 1.0 },
-                                end[2],
-                            ]);
+                        if matches!(shape, Shape::Point | Shape::Circle) {
+                            m.radius = 0.0;
+                            m.end = None;
+                        } else {
+                            m.radius = 0.0;
+                            m.end = Some([m.position[0] + 8.0, m.position[1] + 8.0, m.position[2]]);
                         }
                     }
-                });
-                let previous_position = m.position;
-                ui.label(tr!("tactical-position"));
-                ui.horizontal(|ui| {
-                    let width = ((ui.available_width() - ui.spacing().item_spacing.x * 2.0) / 3.0).max(48.0);
-                    for coordinate in &mut m.position {
-                        ui.add_sized([width, 24.0], egui::DragValue::new(coordinate).speed(0.1).max_decimals(2));
-                    }
-                });
-                if previous_position != m.position
-                    && let Some(end) = &mut m.end
-                {
-                    for i in 0..3 {
-                        end[i] += m.position[i] - previous_position[i];
-                    }
-                }
-                if previous_position != m.position {
-                    for point in &mut m.path {
-                        for axis in 0..3 {
-                            point[axis] += m.position[axis] - previous_position[axis];
-                        }
-                    }
-                }
-                if m.shape() != Shape::Square
-                    && let Some(end) = &mut m.end
-                {
-                    ui.label(tr!("tactical-end"));
                     ui.horizontal(|ui| {
-                        for value in end {
-                            ui.add(egui::DragValue::new(value).speed(0.1));
+                        widgets::switch(ui, p, &mut m.selected);
+                        ui.text_edit_singleline(&mut m.name);
+                        if ui.button(tr!("tactical-remove")).clicked() {
+                            remove = Some(i);
                         }
                     });
-                }
+                    ui.horizontal(|ui| {
+                        widgets::color_button(ui, p, "color", &mut m.color, false);
+                        if m.shape().tool() == Shape::Circle {
+                            ui.add(egui::Slider::new(&mut m.radius, 0.0..=1024.0).text(tr!("combat-editor-radius")));
+                        }
+                        if m.shape() == Shape::Square
+                            && let Some(end) = m.end
+                        {
+                            let dx = end[0] - m.position[0];
+                            let dy = end[1] - m.position[1];
+                            let mut side = dx.abs().max(dy.abs()).clamp(0.1, 1024.0);
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut side)
+                                        .range(0.1..=1024.0)
+                                        .prefix(tr!("tactical-square-side")),
+                                )
+                                .changed()
+                            {
+                                m.end = Some([
+                                    m.position[0] + side * if dx < 0.0 { -1.0 } else { 1.0 },
+                                    m.position[1] + side * if dy < 0.0 { -1.0 } else { 1.0 },
+                                    end[2],
+                                ]);
+                            }
+                        }
+                    });
+                    let previous_position = m.position;
+                    ui.label(tr!("tactical-position"));
+                    ui.horizontal(|ui| {
+                        let width = ((ui.available_width() - ui.spacing().item_spacing.x * 2.0) / 3.0).max(48.0);
+                        for coordinate in &mut m.position {
+                            ui.add_sized([width, 24.0], egui::DragValue::new(coordinate).speed(0.1).max_decimals(2));
+                        }
+                    });
+                    if previous_position != m.position
+                        && let Some(end) = &mut m.end
+                    {
+                        for i in 0..3 {
+                            end[i] += m.position[i] - previous_position[i];
+                        }
+                    }
+                    if previous_position != m.position {
+                        for point in &mut m.path {
+                            for axis in 0..3 {
+                                point[axis] += m.position[axis] - previous_position[axis];
+                            }
+                        }
+                    }
+                    if m.shape() != Shape::Square
+                        && let Some(end) = &mut m.end
+                    {
+                        ui.label(tr!("tactical-end"));
+                        ui.horizontal(|ui| {
+                            for value in end {
+                                ui.add(egui::DragValue::new(value).speed(0.1));
+                            }
+                        });
+                    }
+                })
             });
         }
         if let Some(i) = remove {
