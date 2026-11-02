@@ -14,8 +14,8 @@ impl App {
         let side_m = f64::from(region.heightmap.size_x.max(region.heightmap.size_y));
         let (ox, oy) = aurora_net::handle_to_origin(region.handle);
         let region_name = region.name.clone();
-        let (objects, parcels) = self.combat_window.map_layers();
-        let Some(base) = ui::minimap::export_rasters(&self.world, job.side as usize, objects, parcels, &self.settings.maps) else {
+        let view = self.settings.maps.tactical.map_view;
+        let Some(base) = ui::minimap::export_rasters(&self.world, job.side as usize, view, job.transparent, &self.settings.maps) else {
             self.world.system_message(tr!("combat-editor-file-failed"));
             return;
         };
@@ -33,7 +33,7 @@ impl App {
             legend_heading: heading,
         };
         let svg = export::svg(&cfg.draw_order(), &sheet);
-        let png = match export::render(&base, &svg, &ui::fonts::export_faces(), job.side) {
+        let png = match export::render(&base, &svg, &ui::fonts::export_faces(), job.side, job.transparent) {
             Ok(png) => png,
             Err(_) => {
                 self.world.system_message(tr!("combat-editor-file-failed"));

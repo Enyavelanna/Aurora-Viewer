@@ -2621,31 +2621,7 @@ impl Settings {
         } else {
             10.0
         };
-        // Combat 2.0 used separate arrays before reward rows became paired.
-        // Preserve their values while moving them to Award::ALL order.
-        let combat_awards = crate::combat::awards::Award::ALL.len();
-        if self.combat.announcement_assets.len() == 10 {
-            let old = std::mem::take(&mut self.combat.announcement_assets);
-            let mut migrated = vec![String::new(); combat_awards];
-            for (old_slot, new_slot) in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].into_iter().enumerate() {
-                migrated[new_slot] = old[old_slot].clone();
-            }
-            self.combat.announcement_assets = migrated;
-        } else {
-            self.combat.announcement_assets.resize(combat_awards, String::new());
-            self.combat.announcement_assets.truncate(combat_awards);
-        }
-        if self.combat.medal_textures.len() == 9 {
-            let old = std::mem::take(&mut self.combat.medal_textures);
-            let mut migrated = vec![String::new(); combat_awards];
-            for (old_slot, new_slot) in [0, 1, 2, 4, 6, 9, 10, 12, 11].into_iter().enumerate() {
-                migrated[new_slot] = old[old_slot].clone();
-            }
-            self.combat.medal_textures = migrated;
-        } else {
-            self.combat.medal_textures.resize(combat_awards, String::new());
-            self.combat.medal_textures.truncate(combat_awards);
-        }
+        self.combat.migrate_rewards();
         self
     }
 

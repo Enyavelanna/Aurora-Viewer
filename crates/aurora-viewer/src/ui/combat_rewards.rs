@@ -1,81 +1,59 @@
-//! Compact reward studio for Combat: one selected event, one preview and one
+//! Compact reward studio for Combat: one selected medal, one preview and one
 //! editor. The same presentation metadata drives the in-world medal banner.
-use super::{options, widgets};
-use crate::{combat::awards::Award, theme::Palette};
+use super::{combat_cards, options, widgets};
+use crate::{
+    combat::awards::{Award, Family},
+    theme::Palette,
+};
 use aurora_i18n::tr;
 use egui::{Color32, RichText, Vec2};
 use uuid::Uuid;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Family {
-    Rapid,
-    Streak,
-    Rivalry,
-}
-
-fn family(award: Award) -> Family {
-    match award {
-        Award::First | Award::Double | Award::Triple | Award::Multi | Award::Ultra => Family::Rapid,
-        Award::Five | Award::Ten | Award::Fifteen | Award::Twenty | Award::Thirty => Family::Streak,
-        Award::Revenge | Award::Dominating | Award::Comeback => Family::Rivalry,
-    }
-}
-
-fn family_index(award: Award) -> usize {
-    match family(award) {
-        Family::Rapid => 0,
-        Family::Streak => 1,
-        Family::Rivalry => 2,
-    }
-}
-
-fn family_range(index: usize) -> std::ops::Range<usize> {
-    match index {
-        1 => 5..10,
-        2 => 10..13,
-        _ => 0..5,
-    }
-}
+/// The longest name a medal can be given.
+const NAME_LEN: usize = 32;
 
 pub(crate) fn accent(p: &Palette, award: Award) -> Color32 {
-    match family(award) {
-        Family::Rapid => p.violet_light,
+    match award.family() {
+        Family::Combo => p.violet_light,
         Family::Streak => p.amber,
-        Family::Rivalry => p.teal,
+        Family::Event => p.teal,
     }
 }
 
 pub(crate) fn icon(award: Award) -> &'static str {
-    match family(award) {
-        Family::Rapid => "bolt-filled",
+    match award.family() {
+        Family::Combo => "bolt-filled",
         Family::Streak => "crown-filled",
-        Family::Rivalry => "trophy-filled",
+        Family::Event => "trophy-filled",
+    }
+}
+
+fn family_name(family: Family) -> &'static str {
+    match family {
+        Family::Combo => tr!("combat-reward-family-rapid"),
+        Family::Streak => tr!("combat-reward-family-streak"),
+        Family::Event => tr!("combat-reward-family-rivalry"),
     }
 }
 
 pub(crate) fn family_label(award: Award) -> &'static str {
-    match family(award) {
-        Family::Rapid => tr!("combat-reward-family-rapid"),
-        Family::Streak => tr!("combat-reward-family-streak"),
-        Family::Rivalry => tr!("combat-reward-family-rivalry"),
-    }
+    family_name(award.family())
 }
 
+/// What earns the medal, in a sentence.
 pub(crate) fn rule(award: Award) -> &'static str {
     match award {
-        Award::First => tr!("combat-reward-rule-first"),
         Award::Double => tr!("combat-reward-rule-double"),
         Award::Triple => tr!("combat-reward-rule-triple"),
-        Award::Multi => tr!("combat-reward-rule-multi"),
-        Award::Ultra => tr!("combat-reward-rule-ultra"),
-        Award::Five => tr!("combat-reward-rule-five"),
-        Award::Ten => tr!("combat-reward-rule-ten"),
-        Award::Fifteen => tr!("combat-reward-rule-fifteen"),
-        Award::Twenty => tr!("combat-reward-rule-twenty"),
-        Award::Thirty => tr!("combat-reward-rule-thirty"),
+        Award::Quad => tr!("combat-reward-rule-quad"),
+        Award::Penta => tr!("combat-reward-rule-penta"),
+        Award::Streak10 => tr!("combat-reward-rule-streak10"),
+        Award::Streak20 => tr!("combat-reward-rule-streak20"),
+        Award::Streak30 => tr!("combat-reward-rule-streak30"),
+        Award::Streak50 => tr!("combat-reward-rule-streak50"),
         Award::Revenge => tr!("combat-reward-rule-revenge"),
-        Award::Dominating => tr!("combat-reward-rule-dominating"),
-        Award::Comeback => tr!("combat-reward-rule-comeback"),
+        Award::Domination => tr!("combat-reward-rule-dominating"),
+        Award::Shutdown => tr!("combat-reward-rule-shutdown"),
     }
 }
 
@@ -98,8 +76,7 @@ pub(crate) fn show(
     result: &mut options::OptionsResult,
 ) -> bool {
     let awards = Award::ALL;
-    cfg.announcement_assets.resize(awards.len(), String::new());
-    cfg.medal_textures.resize(awards.len(), String::new());
+    cfg.migrate_rewards();
     state.combat_reward_selected = state.combat_reward_selected.min(awards.len() - 1);
     let mut changed = false;
     let selected = awards[state.combat_reward_selected];
@@ -109,7 +86,7 @@ pub(crate) fn show(
             ui.horizontal_top(|ui| {
                 let texture = cfg
                     .medal_textures
-                    .get(state.combat_reward_selected)
+                    .get(selected.slot())
                     .and_then(|value| Uuid::parse_str(value).ok())
                     .and_then(|id| state.combat_medal_images.get(&id));
                 widgets::picture(ui, &p, texture, Vec2::splat(92.0), icon(selected), tr!("combat-reward-no-image"));
@@ -120,7 +97,7 @@ pub(crate) fn show(
                             .strong()
                             .color(accent(&p, selected)),
                     );
-                    ui.label(RichText::new(selected.label()).size(20.0).strong());
+                    ui.label(RichText::new(cfg.medal_name(selected)).size(20.0).strong());
                     ui.label(RichText::new(rule(selected)).color(p.muted));
                     ui.add_space(5.0);
                     ui.horizontal(|ui| {
@@ -129,14 +106,14 @@ pub(crate) fn show(
                             &p,
                             "volume-filled",
                             tr!("combat-reward-sound-ready"),
-                            configured(&cfg.announcement_assets[state.combat_reward_selected]),
+                            configured(&cfg.announcement_assets[selected.slot()]),
                         );
                         asset_state(
                             ui,
                             &p,
                             "photo-filled",
                             tr!("combat-reward-image-ready"),
-                            configured(&cfg.medal_textures[state.combat_reward_selected]),
+                            configured(&cfg.medal_textures[selected.slot()]),
                         );
                     });
                 });
@@ -159,7 +136,7 @@ pub(crate) fn show(
         });
 
         ui.add_space(8.0);
-        let mut category = family_index(selected);
+        let mut category = selected.family().index();
         if widgets::segmented(
             ui,
             &p,
@@ -170,28 +147,54 @@ pub(crate) fn show(
                 (tr!("combat-reward-family-rivalry"), true),
             ],
         ) {
-            state.combat_reward_selected = family_range(category).start;
+            state.combat_reward_selected = Family::ALL[category].slots().start;
         }
+        let family = Family::ALL[category];
+
+        // the family: on or off, and how loud
+        ui.add_space(4.0);
+        changed |= combat_cards::switch_row(
+            ui,
+            &p,
+            &mut cfg.family_on[category],
+            tr!("combat-reward-family-on"),
+            tr!("combat-reward-family-on-help"),
+        );
+        let on = cfg.family_on[category];
+        changed |= combat_cards::under(ui, on, |ui| {
+            combat_cards::slider_row(
+                ui,
+                tr!("combat-reward-family-volume"),
+                tr!("combat-reward-family-volume-help"),
+                &mut cfg.family_volume[category],
+                0.0..=1.0,
+                "",
+            )
+        });
 
         ui.add_space(6.0);
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(245.0);
-                for slot in family_range(category) {
+                for slot in family.slots() {
                     let award = awards[slot];
                     let sound = configured(&cfg.announcement_assets[slot]);
                     let image = configured(&cfg.medal_textures[slot]);
-                    let count = match (sound, image) {
-                        (true, true) => tr!("combat-reward-complete"),
-                        (true, false) => tr!("combat-reward-sound-only"),
-                        (false, true) => tr!("combat-reward-image-only"),
-                        (false, false) => tr!("combat-reward-empty"),
+                    let count = if !cfg.medal_on(award) {
+                        tr!("combat-reward-off")
+                    } else {
+                        match (sound, image) {
+                            (true, true) => tr!("combat-reward-complete"),
+                            (true, false) => tr!("combat-reward-sound-only"),
+                            (false, true) => tr!("combat-reward-image-only"),
+                            (false, false) => tr!("combat-reward-empty"),
+                        }
                     };
                     if widgets::navigation_wrapped(
                         ui,
                         &p,
                         icon(award),
-                        award.label(),
+                        cfg.medal_name(award),
                         Some(count),
                         state.combat_reward_selected == slot,
                     )
@@ -210,9 +213,41 @@ pub(crate) fn show(
                     ui.horizontal(|ui| {
                         widgets::glyph(ui, icon(award), accent(&p, award), 20.0);
                         ui.vertical(|ui| {
-                            ui.label(RichText::new(award.label()).size(16.0).strong());
+                            ui.label(RichText::new(cfg.medal_name(award)).size(16.0).strong());
                             ui.label(RichText::new(family_label(award)).size(11.0).color(p.muted));
                         });
+                    });
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(tr!("combat-reward-behaviour")).strong());
+                    ui.label(RichText::new(rule(award)).color(p.muted));
+                    ui.add_space(8.0);
+                    changed |= combat_cards::switch_row(
+                        ui,
+                        &p,
+                        &mut cfg.medal_enabled[slot],
+                        tr!("combat-reward-enabled"),
+                        tr!("combat-reward-enabled-help"),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(tr!("combat-reward-name")).strong());
+                    ui.horizontal(|ui| {
+                        changed |= ui
+                            .add(
+                                egui::TextEdit::singleline(&mut cfg.medal_names[slot])
+                                    .char_limit(NAME_LEN)
+                                    .hint_text(award.label()),
+                            )
+                            .changed();
+                        if widgets::icon_button(
+                            ui,
+                            &p,
+                            "arrow-back-up",
+                            tr!("combat-reward-name-reset"),
+                            !cfg.medal_names[slot].is_empty(),
+                        ) {
+                            cfg.medal_names[slot].clear();
+                            changed = true;
+                        }
                     });
                     ui.add_space(8.0);
                     ui.label(RichText::new(tr!("combat-sound-uuid")).strong());
@@ -224,9 +259,6 @@ pub(crate) fn show(
                     changed |= ui
                         .add(egui::TextEdit::singleline(&mut cfg.medal_textures[slot]).hint_text(tr!("combat-reward-optional-image")))
                         .changed();
-                    ui.add_space(8.0);
-                    ui.label(RichText::new(tr!("combat-reward-behaviour")).strong());
-                    ui.label(RichText::new(rule(award)).color(p.muted));
                 });
             });
         });

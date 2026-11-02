@@ -444,12 +444,12 @@ pub(crate) fn svg(markers: &[&Marker], sheet: &Sheet) -> String {
 /// Terrain and the like under the markers, then the markers, as PNG bytes.
 /// `base` are square pictures of the region (opaque terrain first), each
 /// `side` pixels wide; `fonts` the faces the names are written with.
-pub(crate) fn render(base: &[egui::ColorImage], svg: &str, fonts: &[Vec<u8>], side: u32) -> Result<Vec<u8>, String> {
+pub(crate) fn render(base: &[egui::ColorImage], svg: &str, fonts: &[Vec<u8>], side: u32, transparent: bool) -> Result<Vec<u8>, String> {
     use resvg::{tiny_skia, usvg};
     let mut canvas = tiny_skia::Pixmap::new(side, side).ok_or("size")?;
     let n = (side as usize) * (side as usize);
-    // straight RGBA over a dark ground
-    let mut buf: Vec<[u8; 4]> = vec![[24, 27, 35, 255]; n];
+    // straight RGBA over a dark ground, or over nothing for a picture of the markers alone
+    let mut buf: Vec<[u8; 4]> = vec![if transparent { [0, 0, 0, 0] } else { [24, 27, 35, 255] }; n];
     for image in base {
         if image.size != [side as usize, side as usize] {
             return Err("layer size".into());
@@ -457,13 +457,16 @@ pub(crate) fn render(base: &[egui::ColorImage], svg: &str, fonts: &[Vec<u8>], si
         for (out, px) in buf.iter_mut().zip(&image.pixels) {
             let [r, g, b, a] = px.to_srgba_unmultiplied();
             let a = u32::from(a);
+            let below = u32::from(out[3]) * (255 - a) / 255;
+            let alpha = a + below;
             for (o, s) in out.iter_mut().zip([r, g, b]) {
-                *o = ((u32::from(s) * a + u32::from(*o) * (255 - a)) / 255) as u8;
+                *o = ((u32::from(s) * a + u32::from(*o) * below).checked_div(alpha)).unwrap_or(0) as u8;
             }
+            out[3] = alpha as u8;
         }
     }
     for (dst, src) in canvas.pixels_mut().iter_mut().zip(&buf) {
-        *dst = tiny_skia::ColorU8::from_rgba(src[0], src[1], src[2], 255).premultiply();
+        *dst = tiny_skia::ColorU8::from_rgba(src[0], src[1], src[2], src[3]).premultiply();
     }
     let mut options = usvg::Options::default();
     let mut family = None;
@@ -606,7 +609,7 @@ mod tests {
         s.title = false;
         s.legend = false;
         let svg = svg(&[&zone], &s);
-        let png = render(&[terrain], &svg, &[], side as u32).expect("render");
+        let png = render(&[terrain], &svg, &[], side as u32, false).expect("render");
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
         let image = image::load_from_memory(&png).expect("decode").to_rgba8();
         // the middle of the zone is the zone's red, a corner is the terrain
@@ -624,10 +627,28 @@ mod tests {
                 &[wrong],
                 "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"/>",
                 &[],
-                64
+                64,
+                false
             )
             .is_err()
         );
         assert_eq!(nice_length(60.0), 50.0);
+    }
+
+    #[test]
+    fn a_picture_of_the_markers_alone_is_transparent_where_nothing_is_drawn() {
+        let side = 64usize;
+        let svg =
+            format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{side}\" height=\"{side}\" viewBox=\"0 0 {side} {side}\"></svg>");
+        let png = render(&[], &svg, &[], side as u32, true).expect("render");
+        let decoded = image_pixels(&png);
+        assert!(decoded.iter().all(|px| px[3] == 0), "nothing drawn, nothing there");
+        let opaque = render(&[], &svg, &[], side as u32, false).expect("render");
+        assert!(image_pixels(&opaque).iter().all(|px| px[3] == 255));
+    }
+
+    fn image_pixels(png: &[u8]) -> Vec<[u8; 4]> {
+        let pixmap = resvg::tiny_skia::Pixmap::decode_png(png).expect("png");
+        pixmap.pixels().iter().map(|p| [p.red(), p.green(), p.blue(), p.alpha()]).collect()
     }
 }

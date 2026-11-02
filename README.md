@@ -29,11 +29,12 @@ Everything lives in one native window, opened by the **Combat** toolbar button (
 - **Kill feed**: an on-screen list of recent eliminations (position, size, opacity, lifetime, count).
 
 ### Awards, announcements and medals
-- **Multikills** within 5 seconds: First, Double, Triple, Multi, Ultra.
-- **Kill streaks** without dying: 5, 10, 15, 20, 30.
-- **Rivalry**: Revenge, Dominating, Comeback.
-- One optional announcement sound per award, and an animated **medal banner** with an optional image.
-- An **award studio** to set the sound and image of every award, read its trigger rule and preview it.
+- Eleven medals in three families. **Combos**, kills less than 5 seconds apart: Double, Triple, Quadruple, Pentakill. **Streaks** without dying: 10, 20, 30, 50. **Events**: Revenge, Domination, and Shutdown (you end someone's streak of 5 kills or more).
+- **One announcement per kill:** the biggest medal (streak, then event, then combo) gets the sound and the banner; the other medals the same kill earned sit under the banner as small chips.
+- An **award studio**: for every medal a name you choose (the default name comes back when the field is empty), its own switch, a sound and an image, a plain-language trigger and a preview. Each family has a switch and a volume.
+- **Banner settings:** size, duration, distance from the top, chips on or off, and a calm animation that only fades.
+- **Medals of everyone:** the killfeed and the journal list the medals earned by anyone on the region (worked out from the deaths received, so streaks and Shutdowns of others show too).
+- **Fight recaps** in the journal: a fight ends a minute after your last kill or death, and the recap gives kills, deaths, best streak and medals.
 
 ### Combat log
 - A **Combat tab** in Conversations (can be hidden) with All and Mine views.
@@ -57,6 +58,7 @@ Everything lives in one native window, opened by the **Combat** toolbar button (
 - Incoming messages are authenticated to their sender and protected against replays. Sender and receiver can each be turned off.
 - A marker set has **one format** (format 4: its name, its layers and its markers), the same in a file and in what is sent to residents. Older transfers and single-marker shares are no longer understood: everyone sharing needs the same build.
 - **Set file:** the editor's Set tab exports the active set to a JSON file and imports one as a new set of the region (the file is checked: format, sizes, layers and every marker).
+- **Map tab:** three looks (Tactical, Detailed, Clean) and each piece on its own: terrain or a plain ground, ground brightness, objects, parcel lines, grid. The picture follows them, and can be markers alone on a transparent image. The JSON file can keep the look too (importing applies it).
 - **Picture of the map:** the same tab saves the annotated region as a PNG (1024, 2048 or 4096 pixels): height-shaded terrain, optional objects and parcel lines, every marker (dashes, hatching, arrowheads, pins, texts, names where you put them), a title with the region and set names, a legend of the named pins, the scale and the north.
 
 ### Zoomed aim sensitivity

@@ -165,7 +165,15 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                 **changed = true;
             }
             gap(ui);
-            let feed = (c.feed, c.feed_size, c.feed_opacity, c.feed_seconds, c.feed_entries, c.feed_position);
+            let feed = (
+                c.feed,
+                c.feed_size,
+                c.feed_opacity,
+                c.feed_seconds,
+                c.feed_entries,
+                c.feed_position,
+                c.feed_medals,
+            );
             let feed_default = (
                 dc.feed,
                 dc.feed_size,
@@ -173,6 +181,7 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                 dc.feed_seconds,
                 dc.feed_entries,
                 dc.feed_position,
+                dc.feed_medals,
             );
             if Card::new("list-details-filled", tr!("combat-feed"))
                 .modified(feed != feed_default)
@@ -180,7 +189,8 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                     **changed |= switch_row(ui, p, &mut c.feed, tr!("combat-feed"), "");
                     let on = c.feed;
                     **changed |= under(ui, on, |ui| {
-                        let mut any = slider_row(ui, tr!("combat-size"), "", &mut c.feed_size, 9.0..=32.0, "");
+                        let mut any = switch_row(ui, p, &mut c.feed_medals, tr!("combat-feed-medals"), tr!("combat-feed-medals-help"));
+                        any |= slider_row(ui, tr!("combat-size"), "", &mut c.feed_size, 9.0..=32.0, "");
                         any |= slider_row(ui, tr!("combat-opacity"), "", &mut c.feed_opacity, 0.1..=1.0, "");
                         any |= slider_row(ui, tr!("combat-duration"), "", &mut c.feed_seconds, 1.0..=30.0, "");
                         any |= slider_row(ui, tr!("combat-entries"), "", &mut c.feed_entries, 1..=20, "");
@@ -189,7 +199,15 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                     });
                 })
             {
-                (c.feed, c.feed_size, c.feed_opacity, c.feed_seconds, c.feed_entries, c.feed_position) = feed_default;
+                (
+                    c.feed,
+                    c.feed_size,
+                    c.feed_opacity,
+                    c.feed_seconds,
+                    c.feed_entries,
+                    c.feed_position,
+                    c.feed_medals,
+                ) = feed_default;
                 **changed = true;
             }
         },
@@ -216,7 +234,25 @@ fn awards(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, 
         changed = true;
     }
     gap(ui);
-    changed | super::combat_rewards::show(ui, *p, &mut s.combat, st, r)
+    changed |= super::combat_rewards::show(ui, *p, &mut s.combat, st, r);
+    gap(ui);
+    let c = &mut s.combat;
+    let banner = (c.chips, c.banner_scale, c.banner_seconds, c.banner_top, c.banner_calm);
+    let banner_default = (d.chips, d.banner_scale, d.banner_seconds, d.banner_top, d.banner_calm);
+    if Card::new("eye-filled", tr!("combat-banner-title"))
+        .modified(banner != banner_default)
+        .show(ui, p, |ui| {
+            changed |= switch_row(ui, p, &mut c.chips, tr!("combat-banner-chips"), tr!("combat-banner-chips-help"));
+            changed |= slider_row(ui, tr!("combat-banner-scale"), "", &mut c.banner_scale, 0.5..=2.0, "");
+            changed |= slider_row(ui, tr!("combat-banner-seconds"), "", &mut c.banner_seconds, 1.0..=8.0, " s");
+            changed |= slider_row(ui, tr!("combat-banner-top"), "", &mut c.banner_top, 0.0..=400.0, "");
+            changed |= switch_row(ui, p, &mut c.banner_calm, tr!("combat-banner-calm"), tr!("combat-banner-calm-help"));
+        })
+    {
+        (c.chips, c.banner_scale, c.banner_seconds, c.banner_top, c.banner_calm) = banner_default;
+        changed = true;
+    }
+    changed
 }
 
 fn minimap(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d: &Settings) -> bool {

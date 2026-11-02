@@ -60,7 +60,7 @@ Also draw a non-square rectangle and a freehand route, hatch circular and rectan
 zones, vary grid spacing, snap placements, erase a marker and undo. Save/reload and
 share with an updated peer to verify that paths and hatching persist.
 The recap holds only deaths. Hiding its tab must not stop recording.
-`AURORA_DEMO_OPTIONS=combat/editor-set` opens the editor on its Set tab (picture and file buttons), `combat/editor-layers` on the layer list.
+`AURORA_DEMO_OPTIONS=combat/editor-set` opens the editor on its Set tab (picture and file buttons), `combat/editor-map` on its Map tab (presets, ground, brightness, objects, parcel lines, grid), `combat/editor-layers` on the layer list.
 `AURORA_DEMO_COMBAT=callouts` fills the active set with a callout map (a zone, a turned cover, a route, an arrow, pins A and B, a text and a hatched circle on the three default layers): open the region editor with `AURORA_DEMO_OPTIONS=combat/editor` and capture at frame 700, or look at the minimap, which draws the same markers and starts in edit mode with the zone selected (drag it, pull a handle, Ctrl+Z).
 Use `AURORA_DEMO_COMBAT=workspace` for window captures with the same markers
 and journal data, without automatic combat overlays obscuring the controls.

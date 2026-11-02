@@ -956,7 +956,7 @@ impl MiniMap {
             }
             let z = world.agent.position.z as f64;
             let (hx, hy) = resp.hover_pos().map_or((0.0, 0.0), |at| view.to_global(at));
-            resp.context_menu(|ui| {
+            menu::context_menu(&resp, p, |ui| {
                 let mut open_editor = false;
                 let mut duplicate = false;
                 let mut delete = false;
@@ -1080,22 +1080,55 @@ impl MiniMap {
                 ui.close();
                 return;
             };
-            if opts.tactical.available() && opts.tactical.enabled {
-                if menu::item(ui, p, "map-pin-filled", aurora_i18n::tr!("combat-minimap-add-pin")) {
-                    opts.tactical
-                        .place_marker(crate::combat::tactical::Shape::Pin, [px, py, world.agent.position.z as f64]);
-                }
-                if menu::item(ui, p, "circle-filled", aurora_i18n::tr!("combat-minimap-add-point")) {
-                    opts.tactical
-                        .place_marker(crate::combat::tactical::Shape::Point, [px, py, world.agent.position.z as f64]);
-                }
-            }
-            if opts.tactical.available() && opts.tactical.pings_enabled {
-                for kind in 0..4 {
-                    if menu::item(ui, p, "map-pin-filled", crate::combat::tactical::kind_name(kind)) {
-                        opts.tactical.ping([px, py, world.agent.position.z as f64], kind);
+            // Combat: everything the feature adds, together and first
+            if opts.tactical.available() {
+                let at = [px, py, world.agent.position.z as f64];
+                if opts.tactical.enabled {
+                    if menu::item(ui, p, "map-pin-filled", aurora_i18n::tr!("combat-minimap-add-pin")) {
+                        opts.tactical.place_marker(crate::combat::tactical::Shape::Pin, at);
+                    }
+                    if menu::item(ui, p, "circle-filled", aurora_i18n::tr!("combat-minimap-add-point")) {
+                        opts.tactical.place_marker(crate::combat::tactical::Shape::Point, at);
                     }
                 }
+                if opts.tactical.pings_enabled {
+                    menu::submenu(ui, p, "map-pin-filled", aurora_i18n::tr!("combat-menu-ping"), true, |ui| {
+                        for kind in 0..4 {
+                            if menu::item(ui, p, "map-pin-filled", crate::combat::tactical::kind_name(kind)) {
+                                opts.tactical.ping(at, kind);
+                            }
+                        }
+                    });
+                }
+                if opts.tactical.enabled {
+                    menu::submenu(ui, p, "pencil-filled", aurora_i18n::tr!("combat-menu-draw"), true, |ui| {
+                        for shape in [crate::combat::tactical::Shape::Rectangle, crate::combat::tactical::Shape::Line] {
+                            if menu::item(ui, p, "map-pin-filled", shape.label()) {
+                                opts.tactical.draw = Some(shape);
+                                opts.tactical.drawing_start = None;
+                            }
+                        }
+                    });
+                    menu::toggle(ui, p, "edit", aurora_i18n::tr!("tactical-edit"), &mut opts.tactical.editing);
+                    if menu::item(ui, p, "pencil-filled", aurora_i18n::tr!("combat-editor-open")) {
+                        actions.push(MiniMapAction::OpenMarkerEditor);
+                    }
+                }
+                menu::toggle(
+                    ui,
+                    p,
+                    "lock-filled",
+                    aurora_i18n::tr!("tactical-fixed-center"),
+                    &mut opts.tactical.fixed_center,
+                );
+                menu::toggle(
+                    ui,
+                    p,
+                    "compass-filled",
+                    aurora_i18n::tr!("tactical-rotate-avatar"),
+                    &mut opts.tactical.rotate_avatar,
+                );
+                menu::separator(ui, p);
             }
             if let Some(&first) = avs.first() {
                 if avs.len() == 1 {
@@ -1224,31 +1257,6 @@ impl MiniMap {
                     &mut opts.mini_collision,
                 );
             });
-            if opts.tactical.available() {
-                menu::toggle(
-                    ui,
-                    p,
-                    "lock-filled",
-                    aurora_i18n::tr!("tactical-fixed-center"),
-                    &mut opts.tactical.fixed_center,
-                );
-                menu::toggle(
-                    ui,
-                    p,
-                    "compass-filled",
-                    aurora_i18n::tr!("tactical-rotate-avatar"),
-                    &mut opts.tactical.rotate_avatar,
-                );
-                if opts.tactical.enabled {
-                    menu::toggle(ui, p, "edit", aurora_i18n::tr!("tactical-edit"), &mut opts.tactical.editing);
-                    for shape in [crate::combat::tactical::Shape::Rectangle, crate::combat::tactical::Shape::Line] {
-                        if menu::item(ui, p, "map-pin-filled", shape.label()) {
-                            opts.tactical.draw = Some(shape);
-                            opts.tactical.drawing_start = None;
-                        }
-                    }
-                }
-            }
             if menu::check(
                 ui,
                 p,
@@ -1424,7 +1432,7 @@ impl MiniMap {
         world: &World,
         tiles: &mut MapTiles,
         opts: &MapSettings,
-        layers: (bool, bool),
+        view: crate::combat::tactical::MapView,
     ) -> Vec<RegionImage> {
         let _ = opts;
         let Some(region) = world.main() else {
@@ -1440,6 +1448,7 @@ impl MiniMap {
                 origin: (ox as f64, oy as f64),
                 size: (width, height),
                 texture: terrain.tex.clone(),
+                ground: true,
             });
         }
         for y in 0..region.heightmap.size_y.div_ceil(256).min(16) {
@@ -1449,6 +1458,7 @@ impl MiniMap {
                         origin: (ox as f64 + x as f64 * 256.0, oy as f64 + y as f64 * 256.0),
                         size: (256.0, 256.0),
                         texture,
+                        ground: true,
                     });
                 }
             }
@@ -1456,7 +1466,7 @@ impl MiniMap {
         let side = width.max(height) as f32;
         let center = (ox as f64 + width / 2.0, oy as f64 + height / 2.0);
         let tpm = 512.0 / side;
-        for (objects, enabled) in [(true, layers.0), (false, layers.1)] {
+        for (objects, enabled) in [(true, view.objects), (false, view.parcels)] {
             let cache = if objects {
                 &mut self.editor_objects
             } else {
@@ -1496,6 +1506,7 @@ impl MiniMap {
                     origin: (center.0 - side as f64 / 2.0, center.1 - side as f64 / 2.0),
                     size: (side as f64, side as f64),
                     texture: raster.tex.clone(),
+                    ground: false,
                 });
             }
         }
@@ -1508,15 +1519,20 @@ impl MiniMap {
     }
 }
 
-/// The region as pictures `side` pixels wide for the exported map: height
-/// shaded terrain (opaque), then the objects and the parcel lines when asked.
+/// The region as pictures `side` pixels wide for the exported map: the ground
+/// first (height shaded, or one plain colour, as bright as the view says; left
+/// out when the picture is of the markers alone), then the objects and the
+/// parcel lines when asked.
 pub(crate) fn export_rasters(
     world: &World,
     side: usize,
-    objects: bool,
-    parcels: bool,
+    view: crate::combat::tactical::MapView,
+    markers_only: bool,
     opts: &MapSettings,
 ) -> Option<Vec<egui::ColorImage>> {
+    use crate::combat::tactical::Ground;
+    let (objects, parcels) = (view.objects, view.parcels);
+    let dim = view.dim.clamp(0.2, 1.0);
     let region = world.main()?;
     let (ox, oy) = aurora_net::handle_to_origin(region.handle);
     let (w, h) = (region.heightmap.size_x as f32, region.heightmap.size_y as f32);
@@ -1535,11 +1551,17 @@ pub(crate) fn export_rasters(
                 - region.heightmap.sample(x, y - 1.0))
                 * 0.12;
             let shade = if z < water { 1.0 } else { (1.0 + slope).clamp(0.72, 1.28) };
-            let lit = |c: u8| (f32::from(c) * shade).clamp(0.0, 255.0) as u8;
+            let lit = |c: u8| (f32::from(c) * shade * dim).clamp(0.0, 255.0) as u8;
             terrain.push(Color32::from_rgb(lit(base.r()), lit(base.g()), lit(base.b())));
         }
     }
-    let mut out = vec![egui::ColorImage::new([side, side], terrain)];
+    let mut out = Vec::new();
+    if !markers_only {
+        out.push(match view.ground {
+            Ground::Shaded => egui::ColorImage::new([side, side], terrain),
+            Ground::Flat => egui::ColorImage::filled([side, side], Color32::from_rgb(52, 58, 72)),
+        });
+    }
     let center = (ox as f64 + f64::from(w) / 2.0, oy as f64 + f64::from(h) / 2.0);
     let tpm = side as f32 / side_m;
     if objects {
@@ -1555,6 +1577,8 @@ pub(crate) struct RegionImage {
     pub origin: (f64, f64),
     pub size: (f64, f64),
     pub texture: egui::TextureHandle,
+    /// Terrain or a map tile (the ground), not objects or parcel lines.
+    pub ground: bool,
 }
 
 /// Ground under a global position, else our own height (teleport target).

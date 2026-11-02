@@ -403,6 +403,81 @@ impl Context {
     }
 }
 
+/// The ground under the markers on the editor's map and in the picture.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum Ground {
+    /// Height-shaded terrain (and the map tiles in the editor).
+    #[default]
+    Shaded,
+    /// One plain colour.
+    Flat,
+}
+
+/// What the editor's map shows under the drawing, and what the picture of
+/// the map is made of. It is kept with the combat settings.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct MapView {
+    pub ground: Ground,
+    pub objects: bool,
+    pub parcels: bool,
+    pub grid: bool,
+    /// How bright the ground is, 0.2 to 1.
+    pub dim: f32,
+}
+
+impl Default for MapView {
+    fn default() -> Self {
+        Self {
+            ground: Ground::Shaded,
+            objects: true,
+            parcels: true,
+            grid: false,
+            dim: 1.0,
+        }
+    }
+}
+
+impl MapView {
+    pub const PRESETS: usize = 3;
+
+    /// 0 tactical (soft terrain, parcel lines), 1 detailed (everything),
+    /// 2 clean (a plain ground, nothing else).
+    pub fn preset(n: usize, grid: bool) -> Self {
+        match n {
+            0 => Self {
+                ground: Ground::Shaded,
+                objects: false,
+                parcels: true,
+                grid,
+                dim: 0.6,
+            },
+            1 => Self { grid, ..Self::default() },
+            _ => Self {
+                ground: Ground::Flat,
+                objects: false,
+                parcels: false,
+                grid,
+                dim: 1.0,
+            },
+        }
+    }
+
+    /// The preset this view is, grid apart.
+    pub fn preset_of(&self) -> Option<usize> {
+        (0..Self::PRESETS).find(|n| {
+            let v = Self::preset(*n, self.grid);
+            v.ground == self.ground && v.objects == self.objects && v.parcels == self.parcels && (v.dim - self.dim).abs() < 0.005
+        })
+    }
+
+    /// Within bounds, whatever a file said.
+    pub fn sane(mut self) -> Self {
+        self.dim = if self.dim.is_finite() { self.dim.clamp(0.2, 1.0) } else { 1.0 };
+        self
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
@@ -466,6 +541,7 @@ pub(crate) struct Settings {
     #[serde(skip)]
     pub sound_pending: bool,
     pub fixed_center: bool,
+    pub map_view: MapView,
     #[serde(skip)]
     pub draw: Option<Shape>,
     #[serde(skip)]
@@ -542,6 +618,7 @@ impl Default for Settings {
             outgoing: Vec::new(),
             sound_pending: false,
             fixed_center: false,
+            map_view: MapView::default(),
             draw: None,
             editing: false,
             edit_drag: None,
@@ -737,6 +814,9 @@ impl Settings {
             return false;
         };
         self.save_set();
+        if let Some(view) = file.view {
+            self.map_view = view.sane();
+        }
         let region = self.library.region_mut(&key, "");
         let name = if file.name.is_empty() {
             tr!("tactical-set-default").to_owned()
@@ -1529,5 +1609,44 @@ mod tests {
         cfg.cancel_gesture();
         assert_eq!(cfg.markers, before.markers);
         assert!(cfg.edit_drag.is_none());
+    }
+
+    #[test]
+    fn map_view_presets_are_recognised_and_keep_the_grid() {
+        for n in 0..MapView::PRESETS {
+            assert_eq!(MapView::preset(n, true).preset_of(), Some(n));
+            assert!(MapView::preset(n, true).grid);
+        }
+        let mut view = MapView::preset(1, false);
+        view.dim = 0.5;
+        assert_eq!(view.preset_of(), None, "a changed piece is no preset any more");
+        let wild = MapView {
+            dim: f32::NAN,
+            ..MapView::default()
+        }
+        .sane();
+        assert_eq!(wild.dim, 1.0);
+        assert_eq!(
+            MapView {
+                dim: 0.0,
+                ..MapView::default()
+            }
+            .sane()
+            .dim,
+            0.2
+        );
+    }
+
+    #[test]
+    fn the_map_view_is_kept_with_the_settings_and_old_settings_still_load() {
+        let cfg = Settings {
+            map_view: MapView::preset(2, true),
+            ..Settings::default()
+        };
+        let text = serde_json::to_string(&cfg).expect("json");
+        let back: Settings = serde_json::from_str(&text).expect("settings");
+        assert_eq!(back.map_view, cfg.map_view);
+        let old: Settings = serde_json::from_str("{}").expect("old settings");
+        assert_eq!(old.map_view, MapView::default());
     }
 }

@@ -35,6 +35,9 @@ pub(crate) struct SetFile {
     pub layers: Vec<Layer>,
     #[serde(default)]
     pub markers: Vec<Marker>,
+    /// How the map looked while the set was drawn, when the file keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<super::tactical::MapView>,
 }
 
 impl SetFile {
@@ -44,6 +47,7 @@ impl SetFile {
             name,
             layers,
             markers,
+            view: None,
         }
     }
 
@@ -259,5 +263,36 @@ mod tests {
             !none.import_set(SetFile::new("x".into(), Vec::new(), Vec::new())),
             "no region, nowhere to put it"
         );
+    }
+
+    #[test]
+    fn a_set_file_may_keep_the_map_view_and_is_read_without_one() {
+        let mut file = SetFile::new("Attack".into(), Vec::new(), Vec::new());
+        let plain = String::from_utf8(file.to_file_bytes().expect("file")).expect("utf8");
+        assert!(!plain.contains("view"), "no view, nothing written");
+        file.view = Some(super::super::tactical::MapView::preset(0, true));
+        let bytes = file.to_file_bytes().expect("file");
+        assert_eq!(SetFile::from_bytes(&bytes), Some(file));
+        assert!(SetFile::from_bytes(plain.as_bytes()).is_some_and(|f| f.view.is_none()));
+    }
+
+    #[test]
+    fn importing_a_set_applies_its_view() {
+        let mut cfg = super::super::tactical::Settings::default();
+        cfg.enter_region(
+            RegionKey {
+                grid: "g".into(),
+                region: 1,
+            },
+            "R",
+        );
+        let mut file = SetFile::new("V".into(), Vec::new(), Vec::new());
+        file.view = Some(super::super::tactical::MapView {
+            dim: 7.0,
+            ..super::super::tactical::MapView::preset(2, false)
+        });
+        assert!(cfg.import_set(file));
+        assert_eq!(cfg.map_view.dim, 1.0, "a view from a file is brought within bounds");
+        assert_eq!(cfg.map_view.ground, super::super::tactical::Ground::Flat);
     }
 }

@@ -13703,9 +13703,11 @@ impl App {
                 && let Ok(id) = uuid::Uuid::parse_str(asset)
                 && !id.is_nil()
             {
-                self.scene
-                    .sounds
-                    .play_ui_gain(self.audio_engine.as_ref(), id, self.settings.combat.voice_volume);
+                self.scene.sounds.play_ui_gain(
+                    self.audio_engine.as_ref(),
+                    id,
+                    self.settings.combat.voice_volume * self.settings.combat.family_volume[award.family().index()],
+                );
             }
             self.chat_ui.combat.preview_award(award, std::time::Instant::now());
         }
@@ -16250,7 +16252,7 @@ impl App {
                             &self.world,
                             &mut self.map_tiles,
                             &self.settings.maps,
-                            self.combat_window.map_layers(),
+                            self.settings.maps.tactical.map_view,
                         );
                         self.combat_window.map_images(images);
                     }
@@ -16274,9 +16276,11 @@ impl App {
                         && let Ok(id) = uuid::Uuid::parse_str(asset)
                         && !id.is_nil()
                     {
-                        self.scene
-                            .sounds
-                            .play_ui_gain(self.audio_engine.as_ref(), id, self.settings.combat.voice_volume);
+                        self.scene.sounds.play_ui_gain(
+                            self.audio_engine.as_ref(),
+                            id,
+                            self.settings.combat.voice_volume * self.settings.combat.family_volume[award.family().index()],
+                        );
                     }
                 }
                 self.about_window(&ctx, &p, renderer);
@@ -16761,6 +16765,9 @@ impl ApplicationHandler for App {
                     }
                     if page == "/editor-layers" {
                         self.combat_window.show_editor_layers();
+                    }
+                    if page == "/editor-map" {
+                        self.combat_window.show_editor_map();
                     }
                     if page == "/editor-set" {
                         self.combat_window.show_editor_set();

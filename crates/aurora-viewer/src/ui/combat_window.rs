@@ -26,9 +26,9 @@ impl CombatWindow {
     pub fn take_export(&mut self) -> Option<super::combat_editor::ExportJob> {
         self.editor.take_export()
     }
-    /// Whether the editor's background shows the objects and the parcel lines.
-    pub fn map_layers(&self) -> (bool, bool) {
-        self.editor.map_layers()
+    pub fn show_editor_map(&mut self) {
+        self.editor.open = true;
+        self.editor.show_map();
     }
     pub fn show_editor_layers(&mut self) {
         self.editor.open = true;

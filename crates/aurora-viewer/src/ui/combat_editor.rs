@@ -11,7 +11,7 @@ use super::{
     widgets,
 };
 use crate::{
-    combat::tactical::{Dash, Layer, MAX_LAYERS, Marker, Settings, Shape, Snapshot, Style},
+    combat::tactical::{Dash, Ground, Layer, MAX_LAYERS, MapView, Marker, Settings, Shape, Snapshot, Style},
     theme::Palette,
     world::World,
 };
@@ -53,6 +53,8 @@ pub(crate) struct ExportJob {
     pub side: u32,
     pub title: bool,
     pub legend: bool,
+    /// The markers alone, on a transparent picture.
+    pub transparent: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -152,6 +154,7 @@ enum Panel {
     #[default]
     Properties,
     Layers,
+    Map,
     Set,
 }
 
@@ -288,10 +291,6 @@ pub(crate) struct Editor {
     pen: Pen,
     /// The layer new markers go to.
     layer: usize,
-    grid: bool,
-    /// Objects and parcel lines of the map under the drawing.
-    objects: bool,
-    parcels: bool,
     snap_grid: bool,
     snap_objects: bool,
     spacing: f64,
@@ -316,6 +315,9 @@ pub(crate) struct Editor {
     export_size: usize,
     export_title: bool,
     export_legend: bool,
+    export_transparent: bool,
+    /// The file keeps how the map looked (the Map tab).
+    file_with_view: bool,
     /// What the last file action said, and whether it worked.
     file_note: Option<(String, bool)>,
     /// The pointer on the map, in global metres.
@@ -336,9 +338,6 @@ impl Default for Editor {
             ruler: Vec::new(),
             pen: Pen::default(),
             layer: 0,
-            grid: false,
-            objects: true,
-            parcels: true,
             snap_grid: false,
             snap_objects: true,
             spacing: 8.0,
@@ -356,6 +355,8 @@ impl Default for Editor {
             export_size: 1,
             export_title: true,
             export_legend: true,
+            export_transparent: false,
+            file_with_view: true,
             file_note: None,
             cursor: None,
         }
@@ -677,14 +678,14 @@ impl Editor {
         self.export_job.take()
     }
 
-    /// The objects and the parcel lines under the drawing.
-    pub fn map_layers(&self) -> (bool, bool) {
-        (self.objects, self.parcels)
-    }
-
     /// Opens on the layer list (the demo's `combat/editor-layers`).
     pub fn show_layers(&mut self) {
         self.panel = Panel::Layers;
+    }
+
+    /// Opens on the map tab (the demo's `combat/editor-map`).
+    pub fn show_map(&mut self) {
+        self.panel = Panel::Map;
     }
 
     /// Opens on the set tab (the demo's `combat/editor-set`).
@@ -775,9 +776,9 @@ impl Editor {
                 self.pan = Vec2::ZERO;
             }
             ui.add_space(8.0);
-            widgets::checkbox(ui, p, &mut self.objects, tr!("combat-editor-objects"));
-            widgets::checkbox(ui, p, &mut self.parcels, tr!("combat-editor-parcels"));
-            widgets::checkbox(ui, p, &mut self.grid, tr!("combat-editor-grid"));
+            widgets::checkbox(ui, p, &mut cfg.map_view.objects, tr!("combat-editor-objects"));
+            widgets::checkbox(ui, p, &mut cfg.map_view.parcels, tr!("combat-editor-parcels"));
+            widgets::checkbox(ui, p, &mut cfg.map_view.grid, tr!("combat-editor-grid"));
             widgets::checkbox(ui, p, &mut self.snap_grid, tr!("combat-editor-snap"));
             widgets::checkbox(ui, p, &mut self.snap_objects, tr!("combat-editor-snap-objects"));
             if self.spacing < 1.0 {
@@ -882,18 +883,28 @@ impl Editor {
         let painter = ui.painter_at(canvas);
         painter.rect_filled(canvas, 0.0, p.field);
         painter.rect_filled(map.rect, 0.0, p.panel);
+        let view = cfg.map_view;
         for image in &self.images {
+            // a flat ground leaves the terrain and the tiles out, a dim one darkens them
+            if image.ground && view.ground == Ground::Flat {
+                continue;
+            }
+            let tint = if image.ground {
+                widgets::PICTURE_TINT.gamma_multiply(view.dim)
+            } else {
+                widgets::PICTURE_TINT
+            };
             let sw = [image.origin.0, image.origin.1, 0.0];
             let ne = [sw[0] + image.size.0, sw[1] + image.size.1, 0.0];
             painter.with_clip_rect(canvas.intersect(map.rect)).image(
                 image.texture.id(),
                 Rect::from_two_pos(map.screen(sw), map.screen(ne)),
                 Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-                widgets::PICTURE_TINT,
+                tint,
             );
         }
         let ppm = map.ppm();
-        if self.grid {
+        if view.grid {
             let s = self.spacing.max(1.0);
             let clip = painter.with_clip_rect(canvas.intersect(map.rect));
             let steps = ((f64::from(size.x.max(size.y)) / s).ceil() as usize).min(4096);
@@ -1541,7 +1552,8 @@ impl Editor {
         let mut tab = match self.panel {
             Panel::Properties => 0,
             Panel::Layers => 1,
-            Panel::Set => 2,
+            Panel::Map => 2,
+            Panel::Set => 3,
         };
         let marker_count = cfg.markers.len();
         let sets = cfg
@@ -1557,10 +1569,11 @@ impl Editor {
             &[
                 (tr!("combat-editor-properties"), selected(cfg).len()),
                 (tr!("combat-editor-layers"), marker_count),
+                (tr!("combat-editor-map"), 0),
                 (tr!("combat-editor-set"), sets),
             ],
         ) {
-            self.panel = [Panel::Properties, Panel::Layers, Panel::Set][tab.min(2)];
+            self.panel = [Panel::Properties, Panel::Layers, Panel::Map, Panel::Set][tab.min(3)];
         }
         ui.add_space(6.0);
         egui::ScrollArea::vertical()
@@ -1568,6 +1581,7 @@ impl Editor {
             .show(ui, |ui| match self.panel {
                 Panel::Properties => self.properties(ui, p, cfg, world, origin),
                 Panel::Layers => self.layers_panel(ui, p, cfg),
+                Panel::Map => self.map_panel(ui, p, cfg),
                 Panel::Set => self.set_panel(ui, p, cfg),
             });
     }
@@ -2149,6 +2163,58 @@ impl Editor {
         }
     }
 
+    /// What lies under the markers: presets, then each piece on its own.
+    fn map_panel(&mut self, ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
+        ui.label(egui::RichText::new(tr!("combat-map-title")).strong().size(14.0).color(p.ink));
+        cards::muted(ui, p, tr!("combat-map-help"));
+        ui.add_space(6.0);
+        let mut preset = cfg.map_view.preset_of().unwrap_or(usize::MAX);
+        if widgets::segmented(
+            ui,
+            p,
+            &mut preset,
+            &[
+                (tr!("combat-map-preset-tactical"), false),
+                (tr!("combat-map-preset-detailed"), false),
+                (tr!("combat-map-preset-clean"), false),
+            ],
+        ) {
+            cfg.map_view = MapView::preset(preset, cfg.map_view.grid);
+        }
+        ui.add_space(8.0);
+        let view = &mut cfg.map_view;
+        let mut flat = usize::from(view.ground == Ground::Flat);
+        ui.label(egui::RichText::new(tr!("combat-map-ground")).color(p.ink));
+        if widgets::segmented(
+            ui,
+            p,
+            &mut flat,
+            &[(tr!("combat-map-ground-shaded"), false), (tr!("combat-map-ground-flat"), false)],
+        ) {
+            view.ground = if flat == 1 { Ground::Flat } else { Ground::Shaded };
+        }
+        ui.add_space(4.0);
+        let mut percent = (view.dim * 100.0).round() as u32;
+        if cards::slider_row(ui, tr!("combat-map-dim"), tr!("combat-map-dim-help"), &mut percent, 20..=100, "%") {
+            view.dim = percent as f32 / 100.0;
+        }
+        cards::switch_row(
+            ui,
+            p,
+            &mut view.objects,
+            tr!("combat-editor-objects"),
+            tr!("combat-map-objects-help"),
+        );
+        cards::switch_row(
+            ui,
+            p,
+            &mut view.parcels,
+            tr!("combat-editor-parcels"),
+            tr!("combat-map-parcels-help"),
+        );
+        cards::switch_row(ui, p, &mut view.grid, tr!("combat-editor-grid"), "");
+    }
+
     fn set_panel(&mut self, ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
         crate::combat::tactical::sets_panel(ui, p, cfg);
         ui.add_space(8.0);
@@ -2196,6 +2262,13 @@ impl Editor {
         widgets::segmented(ui, p, &mut self.export_size, &[("1024", false), ("2048", false), ("4096", false)]);
         cards::switch_row(ui, p, &mut self.export_title, tr!("combat-editor-export-with-title"), "");
         cards::switch_row(ui, p, &mut self.export_legend, tr!("combat-editor-export-with-legend"), "");
+        cards::switch_row(
+            ui,
+            p,
+            &mut self.export_transparent,
+            tr!("combat-editor-export-transparent"),
+            tr!("combat-editor-export-transparent-help"),
+        );
         if widgets::action_button_if(
             ui,
             p,
@@ -2211,6 +2284,7 @@ impl Editor {
                 side: [1024, 2048, 4096][self.export_size.min(2)],
                 title: self.export_title,
                 legend: self.export_legend,
+                transparent: self.export_transparent,
             });
         }
         ui.add_space(10.0);
@@ -2223,6 +2297,13 @@ impl Editor {
         );
         cards::muted(ui, p, tr!("combat-editor-file-help"));
         ui.add_space(4.0);
+        cards::switch_row(
+            ui,
+            p,
+            &mut self.file_with_view,
+            tr!("combat-editor-file-with-view"),
+            tr!("combat-editor-file-with-view-help"),
+        );
         ui.horizontal_wrapped(|ui| {
             if widgets::action_button(
                 ui,
@@ -2234,7 +2315,7 @@ impl Editor {
             )
             .clicked()
             {
-                self.file_note = Some(export_set_file(cfg));
+                self.file_note = Some(export_set_file(cfg, self.file_with_view));
             }
             if widgets::action_button(
                 ui,
@@ -2257,9 +2338,12 @@ impl Editor {
 }
 
 /// Writes the active set to a file the person picks.
-fn export_set_file(cfg: &Settings) -> (String, bool) {
+fn export_set_file(cfg: &Settings, with_view: bool) -> (String, bool) {
     let name = cfg.active_set_name();
-    let file = crate::combat::sets::SetFile::new(name.clone(), cfg.layers.clone(), cfg.markers.clone());
+    let mut file = crate::combat::sets::SetFile::new(name.clone(), cfg.layers.clone(), cfg.markers.clone());
+    if with_view {
+        file.view = Some(cfg.map_view);
+    }
     let Ok(bytes) = file.to_file_bytes() else {
         return (tr!("combat-editor-file-failed").to_owned(), false);
     };

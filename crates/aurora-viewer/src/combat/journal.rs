@@ -209,6 +209,7 @@ mod tests {
                     rezzer: None,
                     target_is_avatar: None,
                 },
+                awards: Vec::new(),
             })
             .collect();
         let mut journal = Journal::default();
