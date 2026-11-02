@@ -62,6 +62,7 @@ mod folders;
 mod map_export;
 use folders::chat_log_root;
 mod contents_drop_demo;
+mod contents_folder_drag_demo;
 mod dof;
 mod double_click;
 mod driver_check;
@@ -75,6 +76,7 @@ mod give_demo;
 mod gpu_stall;
 mod graphics_start;
 mod grid_status;
+mod group_titles;
 mod hover_height;
 mod hover_tips;
 mod hud_drag;
@@ -605,6 +607,7 @@ pub struct App {
     area_search_feed: area_search::Feed,
     /// "Asset blacklist" (World menu).
     blacklist_ui: ui::blacklist::BlacklistUi,
+    group_titles_ui: ui::group_titles::GroupTitlesUi,
     /// "Bumps, pushes & hits" (Help menu).
     bumps_ui: ui::bumps::BumpsUi,
     /// Help › Grid status: the grid's feed (`app/grid_status.rs`), whether
@@ -679,6 +682,8 @@ pub struct App {
     crash_state_at: Option<Instant>,
     /// Swapchain recreations of the last seconds, for the same state.
     crash_swapchain: crash_state::SwapchainRecent,
+    /// The state kept for the report once the GPU is lost.
+    crash_kept: crash_state::KeptState,
     /// The graphics card stopped finishing frames (app/gpu_stall.rs).
     gpu_stall: gpu_stall::GpuStall,
     /// The Down key's latch (FSCrouchToggle).
@@ -1394,6 +1399,7 @@ impl App {
             avatar_render_settings_ui: Default::default(),
             area_search_feed: Default::default(),
             blacklist_ui: Default::default(),
+            group_titles_ui: Default::default(),
             bumps_ui: Default::default(),
             grid_status: Default::default(),
             grid_status_listed: false,
@@ -1445,6 +1451,7 @@ impl App {
             minimized_mute: audio_mute::MinimizedMute::default(),
             crash_state_at: None,
             crash_swapchain: Default::default(),
+            crash_kept: Default::default(),
             gpu_stall: Default::default(),
             crouch_toggle: Default::default(),
             music_parcel_url: String::new(),
@@ -1637,6 +1644,7 @@ impl App {
         }
         if let NetCommand::GroupTitleUpdate { group, role } = &cmd {
             self.world.group_data.title_sent(*group, *role);
+            self.world.region_titles.title_sent(*group, *role);
         }
         if let NetCommand::Build(aurora_net::build::BuildCmd::Transform { handle, updates }) = &cmd {
             self.world.objects.note_sent_transforms(*handle, updates, Instant::now());
@@ -3363,6 +3371,7 @@ impl App {
                         crate::settings::account_dir(&l.agent_id).join(crate::world::rlva::last_points::FILE),
                     )
                 };
+                self.load_region_titles(l.agent_id);
                 self.world.favorites = if self.demo {
                     Default::default()
                 } else {
@@ -7206,6 +7215,9 @@ impl App {
                 let folder = self.world.calling_card_folder();
                 self.send(ui::contacts::friendship_offer(to, message, folder));
             }
+            ContactsAction::GroupTitles => {
+                ui::widgets::toggle_floater(&self.egui_ctx, ui::group_titles::WINDOW, &mut self.panels.group_titles);
+            }
             ContactsAction::ToggleTornOff => {
                 let torn_off = !self.settings.contacts.torn_off;
                 self.settings.contacts.torn_off = torn_off;
@@ -7731,6 +7743,8 @@ impl App {
         for c in self.world.sim_console.take_commands() {
             self.send(c);
         }
+        // Group titles: the window's lists, the arrival's title
+        self.group_titles_tick();
         // the script editor's keywords follow the region's LSL syntax
         if let Some(c) = self.world.follow_lsl_syntax() {
             self.send(c);
@@ -7837,6 +7851,10 @@ impl App {
             self.apply_appearance_action(crate::world::appearance::Action::RemoveOutfit(
                 crate::world::appearance::DEMO_TAKE_OFF_FOLDER,
             ));
+        }
+        // AURORA_DEMO_GROUP_REGION: the Group titles window
+        if self.demo && self.frame_count == 600 && crate::demo::group_region::on() {
+            self.panels.group_titles = true;
         }
         // AURORA_DEMO_SIM_CONSOLE=open: the console and two commands
         if self.demo && self.frame_count == 600 && crate::demo::sim_extras::console_open() {
@@ -9983,6 +10001,7 @@ impl App {
             self.portal_demo_input(&mut raw);
             self.give_demo_input(&mut raw, vp, (w, h));
             self.contents_drop_demo_input(&mut raw, vp, (w, h));
+            self.contents_folder_drag_demo_input(&mut raw);
             if self.frame_count == 420
                 && std::env::var("AURORA_DEMO_ACTIONS").as_deref() == Ok("open-multi")
                 && let Some(c) = &self.interactions.contents
@@ -11479,6 +11498,14 @@ impl App {
             .and_then(|demo| demo.tick(self.frame_count, &mut self.world))
         {
             self.apply_experience_demo(reply);
+        }
+        // AURORA_DEMO_GROUP_REGION=1: to a region with its own group title and back
+        if self.demo
+            && let Some(events) = crate::demo::group_region::trip(self.frame_count, &self.world)
+        {
+            for ev in events {
+                self.world.apply(ev);
+            }
         }
         // AURORA_DEMO_TP_AWAY=1: out of reach of the demo region, then back
         if self.demo
@@ -15951,6 +15978,7 @@ impl App {
                     }
                 }
                 self.blacklist_window(&ctx, &p);
+                self.group_titles_window(&ctx, &p);
                 self.area_search_window(&ctx, &p);
                 self.sound_explorer_window(&ctx, &p);
                 self.animation_explorer_window(&ctx, &p);
@@ -18057,6 +18085,7 @@ impl ApplicationHandler for App {
                     crate::ao::Account {
                         enabled: mode != "off",
                         selected,
+                        ..Default::default()
                     },
                 );
                 self.panels.ao = true;

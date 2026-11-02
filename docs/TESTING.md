@@ -2096,6 +2096,20 @@ No real L$ and no connection to a grid.
   an unconfirmed copy with two of three items received, then clears after
   five seconds. This fixture changes neither real-grid transfers nor their
   60-second deadline. The move warning still requires confirmation at 480.
+- `open-folder`, `open-folder-drop`: after `open`, the inventory opens at
+  frame 540 and a real pointer drag takes the Open window's root
+  "Contents (3 items)" row from frame 620 onto the inventory's Objects
+  folder, held there from frame 640 (the folder is outlined and the cursor
+  says move, the spare cube being no copy). `-drop` releases at frame 720:
+  the notecard and the script go straight into Objects (no new folder; its
+  count goes up by two) and the move warning lists the spare cube, with
+  the scripted object's line; Move takes it out of the cube. The log has
+  `demo contents folder drag: over the inventory folder`, then `released`.
+  Capture at frame 700 (hover) or 780 (warning) with
+  `AURORA_FPS_LIMIT=60`. Manually, with `open`: drag the "Contents" row of
+  the Open window, or of the Build tools' Contents tab
+  (`AURORA_DEMO_BUILD=move,object:976`, `AURORA_DEMO_BUILD_TAB=contents`),
+  onto any inventory folder.
 - `play` starts a local HTML page; `pause` and `open-media-playing`
   inject a simulated playback state before the click; `open-media` simulates
   the opening of the external browser.
@@ -3356,6 +3370,13 @@ previous / auto cycle / next buttons beside it, AO enable, mutually exclusive
 swimming/water walking and the manager button. Check Escape, click-away and repeated toolbar clicks.
 Existing movement preferences and the full manager must reflect the same
 choices. The other menus/commands still open the full manager directly.
+
+For #1394 on the grid, turn automatic cycling off, choose a non-first stand
+from the manager and then from the quick arrows, and check it after logout/login
+and a full viewer restart. Repeat with another set/account and an independent
+track. Reordering retains the animation identity; deleting that choice falls
+back to the first available entry. With cycling on, the remembered animation
+plays first and the configured cycle resumes after its interval.
 
 `interface` opens General; `interface-sitting` selects Sitting in the same
 category. `interface-running` opens Ground with Running selected;
@@ -4752,6 +4773,7 @@ before (`amis`, `groupes`, `repere`, `historique`…) are still accepted.
 | `AURORA_DEMO_REGION=overview\|manage\|people[:role][:preview][:compact][:section][:pending][:ask-…]` | "Region / Estate" as estate owner, manager or resident |
 | `AURORA_DEMO_GROUP_PROFILE=<scenario>[:members\|:invite\|:notices\|:compose\|:admin\|:identity\|:land\|:experiences]` | Group profile window, as a member, officer, owner or guest |
 | `AURORA_DEMO_GROUP_CREATE=form\|cost\|refused\|limit\|created[:classic]` | "Create a group" window and its simulated server |
+| `AURORA_DEMO_GROUP_REGION=1\|still` | Group titles window with region rules; `1` teleports to a region with its own title and back |
 | `AURORA_DEMO_SOCIAL_MENU=<step>` | A resident's "Invite to group", "Add to contact set", "Block particles" and calling card |
 | `AURORA_DEMO_LAND_MODERATION=menu\|none\|freeze\|eject\|eject-ban` | "Freeze" and "Eject" of a resident on our land |
 | `AURORA_DEMO_PLACE=<place>` | "Places" on a place profile |
@@ -7046,6 +7068,10 @@ Human grid validation: remember MFA for account A and B, restart the viewer, the
   how odd names sit beside the region: accents, emoji, other scripts,
   letters from a fallback font, a trailing line break. The parcel's name
   and the region text must share one baseline.
+- **Favorites toolbar regression (#1394)**: place the Favorites button in
+  the bottom, left and right toolbar in each look. Left click opens Favorites;
+  right click shows only the toolbar menu, including usable Remove and Toolbar
+  buttons entries, also while the Favorites grid was already open.
 - **`AURORA_DEMO_BARS=<words>`**: the states of the top and bottom bars
   for the comparisons with the bars mockup, for this run only (nothing is
   saved), with the mockup's long parcel name and, with the islands, its
@@ -7494,6 +7520,22 @@ Human grid validation: remember MFA for account A and B, restart the viewer, the
   then the guest's view) and, in Preferences › Aurora › Profiles, the
   classic window with its "Members and roles", "Notices", "Land and L$"
   and "Experiences" sections.
+- **`AURORA_DEMO_GROUP_REGION=1|still`**: the Group titles window (the
+  toolbar's Group titles command, Contacts › Groups › Titles) opens at frame
+  600, with every title of the three demo groups and three region rules:
+  the demo region wears "Aurora Builders" › Builder (already worn at the
+  start: the log says `region group title: AlreadyWorn`), "Boreal Lagoon"
+  wears "Northern Wolves" › Officer, and "Pine Grove" a group left since
+  (listed as "group left, ignored"). The demo server answers every group's
+  titles, keeps the title chosen in each and names the active group with
+  it. `1`: at frame 900 the avatar teleports to "Boreal Lagoon": the log
+  shows `demo group region: GroupTitleUpdate …` then `ActivateGroup …`,
+  and the name tag and the window show Officer of Northern Wolves; at
+  frame 1500 it is back in the demo region, wearing Builder again.
+  `still`: no teleport, to try the window (This region, Type region with
+  a demo map name such as "sandbox" in English, "sablière" in French, kept
+  as the map spells it, or a made-up name: "could not be found" after
+  10 s; Clear region, the rules' pencil and trash, the default title).
 - **`AURORA_DEMO_GROUP_CREATE=form|cost|refused|limit|created[:classic]`**:
   "Create a group", as from the "Create" button of People › Groups, once
   the group list is in. The login of these scenarios gives a Base
