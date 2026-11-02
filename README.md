@@ -33,6 +33,14 @@ It brings together combat feedback, combat logging, tactical pings, minimap tool
 
 *Main Combat window with feature toggles, combat log integration and tactical tools.*
 
+### Tactical Pings
+
+Mark contacts, objectives, and regroup points without leaving mouselook. The ping wheel supports quick communication, acknowledgements, and off-screen indicators.
+
+<p align="center">
+  <img src="docs/screenshots/combat-ping-wheel.png" alt="Tactical ping wheel in mouselook" width="72%" />
+</p>
+
 ### Region Marker Editor
 
 <p align="center">
