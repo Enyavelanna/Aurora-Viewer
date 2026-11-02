@@ -961,6 +961,20 @@ fn text_scale(settings: &Settings) -> f32 {
         })
 }
 
+/// The conversations' text size, or AURORA_CHAT_TEXT_SIZE for this launch
+/// (brought into the range of the Preferences, never saved), handed to the
+/// fonts with the interface's text size it replaces.
+fn apply_chat_text_scale(ctx: &egui::Context, settings: &Settings) {
+    let chat = std::env::var("AURORA_CHAT_TEXT_SIZE")
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|s| s.is_finite())
+        .map_or(settings.chat_font_scale, |s| {
+            s.clamp(crate::settings::FONT_SCALE_MIN, crate::settings::FONT_SCALE_MAX)
+        });
+    ui::fonts::set_chat_scale(ctx, chat, text_scale(settings));
+}
+
 /// The colour vision the interface adapts to: the preferences', or in demo
 /// mode `AURORA_DEMO_COLORBLIND` (a capture's, never saved).
 fn wanted_vision(settings: &Settings) -> crate::colorblind::Vision {
@@ -1109,6 +1123,7 @@ impl App {
         crate::high_contrast::set(wanted_high_contrast(&settings));
         crate::interface_colors::set(wanted_interface_colors(&settings));
         let skin = Skin::load(&egui_ctx, "aurora", text_scale(&settings));
+        apply_chat_text_scale(&egui_ctx, &settings);
         crate::crash::update(&skin.theme, &settings);
         let palette = skin.theme.palette();
         egui_ctx.set_zoom_factor(ui_scale(&settings));
@@ -3159,11 +3174,13 @@ impl App {
                             self.appearance_ui.saved_new = false;
                         }
                         if sync {
-                            let crate::world::appearance::CofSync { mut commands, unknown } =
-                                crate::world::appearance::sync_plan(&self.world.inventory, self.world.agent_id, &self.outfit_sync_worn());
-                            for attachment in self.appearance_ui.attachments.drain(..) {
-                                crate::world::appearance::apply_attachment_override(&mut commands, attachment);
-                            }
+                            let crate::world::appearance::CofSync { commands, unknown } = crate::world::appearance::sync_with_attachments(
+                                &self.world.inventory,
+                                self.world.agent_id,
+                                &self.outfit_sync_worn(),
+                                &self.appearance_ui.worn_before,
+                                std::mem::take(&mut self.appearance_ui.attachments),
+                            );
                             for cmd in commands {
                                 self.send_from(cmd, actor);
                             }
@@ -9981,6 +9998,11 @@ impl App {
             raw.events.extend(crate::demo::conv_button::input_events(&ctx, self.frame_count));
             raw.events.extend(crate::demo::chatlog::input_events(self.frame_count));
             raw.events.extend(ui::appearance::demo_events(self.frame_count));
+            raw.events.extend(self.appearance_ui.demo_clipboard_events(
+                &ctx,
+                self.frame_count,
+                self.inventory_ui.clipboard.first().copied(),
+            ));
             raw.events.extend(ui::appearance::layer_demo_events(&ctx, self.frame_count));
             raw.events.extend(ui::widgets::demo::snap_events(&ctx, self.frame_count));
             raw.events.extend(ui::widgets::demo::resize_events(&ctx, self.frame_count));
@@ -10358,6 +10380,7 @@ impl App {
                 self.cursors.set_palette(&self.palette);
             }
             self.skin.theme.apply(&self.egui_ctx, text_scale(&self.settings));
+            apply_chat_text_scale(&self.egui_ctx, &self.settings);
             ui::colors::set(&self.settings.colors);
             crate::keywords::set(&self.keyword_settings());
             crate::spelling::configure(&self.egui_ctx, &self.settings.spelling);
@@ -15470,6 +15493,9 @@ impl App {
                 ) {
                     self.apply_appearance_action(action);
                 }
+                if let Some(request) = self.appearance_ui.take_clipboard() {
+                    self.appearance_clipboard(&ctx, request);
+                }
                 if self.settings.appearance_fill_previews != self.appearance_ui.fill_previews {
                     self.settings.appearance_fill_previews = self.appearance_ui.fill_previews;
                     self.settings.save();
@@ -18084,10 +18110,10 @@ impl ApplicationHandler for App {
                 if view == "duplicates" {
                     crate::world::appearance::seed_duplicate_response(&mut self.world.inventory, self.world.agent_id);
                 }
-                if matches!(view.as_str(), "menu" | "duplicates" | "broken" | "multi-items") {
+                if matches!(view.as_str(), "menu" | "duplicates" | "broken" | "multi-items" | "clipboard") {
                     self.appearance_ui.open_outfit(uuid::Uuid::from_u128(704));
                 }
-                if matches!(view.as_str(), "multi-items" | "multi-worn") {
+                if matches!(view.as_str(), "multi-items" | "multi-worn" | "clipboard") {
                     self.appearance_ui.demo_item_selection(&self.world.inventory, view == "multi-worn");
                 }
                 if view == "wearables-outfits" {
