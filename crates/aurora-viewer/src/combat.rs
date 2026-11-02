@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, time::Instant};
 use uuid::Uuid;
 pub(crate) mod awards;
+pub(crate) mod export;
 pub(crate) mod journal;
 pub(crate) mod navigation;
 pub(crate) mod ping_ui;

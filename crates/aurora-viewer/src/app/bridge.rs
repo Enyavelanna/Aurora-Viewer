@@ -134,7 +134,7 @@ impl App {
             // Expiry must also run when the minimap window is closed.
             cfg.prune();
             if !cfg.pings_enabled {
-                cfg.outgoing.retain(|(_, kind)| kind.is_none());
+                cfg.outgoing.clear();
                 cfg.ping_controls.clear();
                 for ping in &mut cfg.pings {
                     if ping.sharing == crate::combat::pings::ShareState::Queued {
@@ -178,10 +178,6 @@ impl App {
                     continue;
                 } else if let Ok(chunk) = serde_json::from_slice::<crate::combat::transfer::Chunk>(&bytes) {
                     cfg.share_error |= cfg.inbox.accept(sender, chunk, Instant::now()).is_err();
-                } else if let Ok(message) = serde_json::from_slice::<crate::combat::tactical::Shared>(&bytes) {
-                    if message.kind.is_some() {
-                        cfg.accept_shared(sender, message, Instant::now());
-                    }
                 } else {
                     cfg.share_error = true;
                 }
@@ -214,23 +210,15 @@ impl App {
             {
                 let mut payloads = Vec::new();
                 for (marker, kind) in outgoing {
-                    if kind.is_some() && !cfg.pings.iter().any(|p| p.marker.id == marker.id) {
+                    if !cfg.pings.iter().any(|p| p.marker.id == marker.id) {
                         continue;
                     }
                     let id = marker.id;
-                    let encoded = if let Some(kind) = kind {
-                        serde_json::to_vec(&crate::combat::pings::Message::new(crate::combat::pings::Action::Place {
-                            id,
-                            position: marker.position,
-                            kind,
-                        }))
-                    } else {
-                        serde_json::to_vec(&crate::combat::tactical::Shared {
-                            version: 2,
-                            marker: marker.clone(),
-                            kind,
-                        })
-                    };
+                    let encoded = serde_json::to_vec(&crate::combat::pings::Message::new(crate::combat::pings::Action::Place {
+                        id,
+                        position: marker.position,
+                        kind,
+                    }));
                     let Ok(bytes) = encoded else {
                         cfg.share_error = true;
                         continue;
@@ -239,7 +227,7 @@ impl App {
                         cfg.share_error = true;
                         continue;
                     }
-                    payloads.push((bytes, kind.is_some(), kind.map(|_| id), None));
+                    payloads.push((bytes, true, Some(id), None));
                 }
                 // A response/cancel keeps its original recipients even when the
                 // player subsequently changes the placement audience.

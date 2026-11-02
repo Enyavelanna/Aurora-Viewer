@@ -52,7 +52,6 @@ impl Ping {
             kind,
             at,
             sender: Uuid::nil(),
-            compatible: true,
             responders: BTreeSet::new(),
             recipients: BTreeSet::new(),
             acknowledged: false,
@@ -110,7 +109,7 @@ impl Settings {
             for (marker, kind) in &mut self.outgoing {
                 if marker.id == id {
                     *marker = ping.marker.clone();
-                    *kind = Some(1);
+                    *kind = 1;
                 }
             }
             self.last_tap = None;
@@ -160,7 +159,7 @@ impl Settings {
             self.pings.remove(index);
             return true;
         }
-        if !self.share || !self.send_enabled || !ping.compatible || ping.acknowledged {
+        if !self.share || !self.send_enabled || ping.acknowledged {
             return false;
         }
         if self.ping_controls.len() >= 64 {
@@ -199,19 +198,7 @@ impl Settings {
                     color: self.colors[kind],
                     ..Marker::default()
                 };
-                let accepted = self.accept_shared(
-                    sender,
-                    super::tactical::Shared {
-                        version: 2,
-                        marker,
-                        kind: Some(kind),
-                    },
-                    now,
-                );
-                if accepted && let Some(ping) = self.pings.last_mut() {
-                    ping.compatible = true;
-                }
-                accepted
+                self.accept_place(sender, marker, kind, now)
             }
             Action::Acknowledge { id } => {
                 let Some(ping) = self
@@ -242,10 +229,7 @@ impl Settings {
                     return false;
                 }
                 if let Some(ping) = self.pings.iter_mut().find(|p| p.sender == sender && p.marker.id == id) {
-                    if !ping.compatible
-                        || ping.kind != 0
-                        || now.saturating_duration_since(ping.at).as_secs_f32() >= self.seconds.clamp(1.0, 60.0)
-                    {
+                    if ping.kind != 0 || now.saturating_duration_since(ping.at).as_secs_f32() >= self.seconds.clamp(1.0, 60.0) {
                         return false;
                     }
                     ping.kind = 1;
@@ -381,7 +365,7 @@ mod tests {
         assert_eq!(cfg.pings[0].at, now);
         assert_eq!(cfg.last_ping, Some(now));
         assert_eq!(cfg.outgoing.len(), 1);
-        assert_eq!(cfg.outgoing[0].1, Some(1));
+        assert_eq!(cfg.outgoing[0].1, 1);
         assert!(!cfg.tap(Some([2.0; 3]), true, None, later));
         assert_eq!(cfg.pings.len(), 1);
         assert!(cfg.recent_tap(now + std::time::Duration::from_secs(1)).is_none());

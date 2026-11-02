@@ -59,6 +59,7 @@ mod derender;
 mod describe;
 mod dev_toolbox;
 mod folders;
+mod map_export;
 use folders::chat_log_root;
 mod contents_drop_demo;
 mod dof;
@@ -7972,11 +7973,7 @@ impl App {
             self.chat_ui.combat.preview_medal = None;
         }
         if !self.settings.maps.tactical.available() {
-            if let Some((original, _, _)) = self.settings.maps.tactical.edit_drag.take()
-                && let Some(marker) = self.settings.maps.tactical.markers.iter_mut().find(|m| m.id == original.id)
-            {
-                *marker = original;
-            }
+            self.settings.maps.tactical.cancel_gesture();
             self.settings.maps.tactical.editing = false;
             self.settings.maps.tactical.capture_key = false;
             self.tactical_press = None;
@@ -8036,13 +8033,20 @@ impl App {
                     egui::vec2(760.0, 300.0),
                 );
                 self.chat_ui.combat_selected = true;
-                let workspace_demo = navigation_demo || std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "workspace");
+                let workspace_demo =
+                    navigation_demo || std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "workspace" || value == "callouts");
                 self.settings.combat.journal = true;
                 self.settings.combat.killmarker = !workspace_demo;
                 self.settings.combat.medals = !workspace_demo;
                 self.settings.combat.feed = !workspace_demo;
                 self.settings.combat.feed_position = crate::combat::Settings::default().feed_position;
                 self.settings.maps.tactical.enabled = true;
+                if std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "callouts") {
+                    let (x, y) = ui::minimap::to_global(&self.world, self.world.agent.position);
+                    self.settings.maps.tactical.markers =
+                        crate::combat::tactical::demo_callouts([x, y], self.world.agent.position.z as f64);
+                    self.settings.maps.tactical.editing = true;
+                }
                 self.settings.maps.tactical.pings_enabled = navigation_demo || !workspace_demo;
                 if navigation_demo {
                     self.settings.combat.enabled = true;
@@ -16199,6 +16203,7 @@ impl App {
                         }
                         ui::minimap::MiniMapAction::Colors(k) => self.settings.colors = k,
                         ui::minimap::MiniMapAction::Close => self.panels.minimap = false,
+                        ui::minimap::MiniMapAction::OpenMarkerEditor => self.combat_window.open_editor(),
                     }
                 }
                 let mut open = self.panels.world_map;
@@ -16240,9 +16245,13 @@ impl App {
                 self.dev_toolbox_window(&ctx, &p, renderer);
                 let combat_result = {
                     if self.combat_window.editor_open() {
-                        let images = self
-                            .minimap_ui
-                            .editor_images(&ctx, &self.world, &mut self.map_tiles, &self.settings.maps);
+                        let images = self.minimap_ui.editor_images(
+                            &ctx,
+                            &self.world,
+                            &mut self.map_tiles,
+                            &self.settings.maps,
+                            self.combat_window.map_layers(),
+                        );
                         self.combat_window.map_images(images);
                     }
                     let result =
@@ -16254,6 +16263,9 @@ impl App {
                     }
                     result
                 };
+                if let Some(job) = self.combat_window.take_export() {
+                    self.export_marker_map(job);
+                }
                 if let Some(slot) = combat_result.combat_preview
                     && let Some(&award) = crate::combat::awards::Award::ALL.get(slot)
                 {
@@ -16747,8 +16759,14 @@ impl ApplicationHandler for App {
                     if page == "/editor" {
                         self.combat_window.open_editor();
                     }
+                    if page == "/editor-layers" {
+                        self.combat_window.show_editor_layers();
+                    }
+                    if page == "/editor-set" {
+                        self.combat_window.show_editor_set();
+                    }
                     self.panels.settings = false;
-                    self.panels.combat = page != "/editor";
+                    self.panels.combat = !page.starts_with("/editor");
                     self.combat_window.tab = page.strip_prefix('/').and_then(|s| s.parse::<usize>().ok()).unwrap_or(0).min(6);
                 }
                 // the former Debug page: the Dev Toolbox

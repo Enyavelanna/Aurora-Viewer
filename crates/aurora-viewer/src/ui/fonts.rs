@@ -15,6 +15,12 @@ pub const NOTO: &str = "Noto Sans";
 pub const ROBOTO: &str = "Roboto";
 pub const OPEN_DYSLEXIC: &str = "OpenDyslexic";
 
+/// The faces an exported picture writes its names with: Inter (regular and
+/// semi-bold), then Noto Sans for what Inter lacks.
+pub fn export_faces() -> Vec<Vec<u8>> {
+    vec![INTER_TTF.to_vec(), INTER_SEMIBOLD_TTF.to_vec(), NOTO_TTF.to_vec()]
+}
+
 /// The interface font of a new profile, and of a choice that cannot be
 /// loaded any more.
 pub const DEFAULT: &str = INTER;

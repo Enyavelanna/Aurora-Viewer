@@ -14,6 +14,7 @@ pub mod bars;
 pub mod bidi;
 pub mod blacklist;
 pub mod bumps;
+pub(crate) mod combat_annotate;
 pub(crate) mod combat_cards;
 pub(crate) mod combat_editor;
 pub(crate) mod combat_pages;

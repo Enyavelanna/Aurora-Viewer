@@ -47,12 +47,17 @@ Everything lives in one native window, opened by the **Combat** toolbar button (
 
 ### Combat minimap and region annotations
 - Persistent **markers and zones** on the minimap (circles, rectangles, lines, freehand paths), with colour, altitude, labels and distances.
-- A full-screen **region marker editor**, and annotation sets saved per region and grid.
+- A **region marker editor** to build callout maps: pins with letters and icons, round, rectangular (rotatable) and polygon zones, arrows, routes, free text and freehand strokes, each with its own colour, fill, line width and dashes. A tool rail with shortcuts (V select, P pin, O circle, R rectangle, G polygon, A arrow, L route, F freehand, T text, M ruler, E eraser), zoom about the pointer, box and multi-selection, handles to reshape, copy and paste, alignment, layers that hide or lock a group, presets (Spawn, Objective, Danger, Cover, Attack path, Callout), a ruler, a scale bar, grid and marker snapping, and 200 steps of undo and redo. The Layers tab lists every marker like a layer panel (eye, lock, rename, bring forward or send backward), markers have no default name, a name can be dragged where it reads best, and a click with the circle tool places a point. A square only comes from holding Shift while dragging a corner.
+- The minimap edits the same markers in place: with edit mode on, click or box to select, drag to move, pull a handle to reshape, Delete, Ctrl+Z and Ctrl+Y, a double click opens the region editor, and the right-click menu places a pin or a point, renames, recolours, duplicates or deletes.
+- Annotation sets are saved per region and grid, with their layers.
 - Optional minimap rotation with your avatar and custom player dots.
 
 ### Sharing
 - Share markers or whole sets with chosen residents, selected people or the group members in the region, as bounded multi-part transfers.
 - Incoming messages are authenticated to their sender and protected against replays. Sender and receiver can each be turned off.
+- A marker set has **one format** (format 4: its name, its layers and its markers), the same in a file and in what is sent to residents. Older transfers and single-marker shares are no longer understood: everyone sharing needs the same build.
+- **Set file:** the editor's Set tab exports the active set to a JSON file and imports one as a new set of the region (the file is checked: format, sizes, layers and every marker).
+- **Picture of the map:** the same tab saves the annotated region as a PNG (1024, 2048 or 4096 pixels): height-shaded terrain, optional objects and parcel lines, every marker (dashes, hatching, arrowheads, pins, texts, names where you put them), a title with the region and set names, a legend of the named pins, the scale and the north.
 
 ### Zoomed aim sensitivity
 - In mouselook, while the right-button zoom is held, the turn rate can follow the zoom so a scoped view moves across the screen as fast as an unzoomed one.

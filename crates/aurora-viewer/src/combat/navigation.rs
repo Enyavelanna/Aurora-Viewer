@@ -319,7 +319,7 @@ pub(super) fn aimed(ctx: &egui::Context, projector: &Projector, world: &World, c
     }
     for group in displayed {
         let ping = group.ping;
-        if !ping.own() && (!ping.compatible || !cfg.share || !cfg.send_enabled) {
+        if !ping.own() && (!cfg.share || !cfg.send_enabled) {
             continue;
         }
         let distance = group.at.distance(aim);

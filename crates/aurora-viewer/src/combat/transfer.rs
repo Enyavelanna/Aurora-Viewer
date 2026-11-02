@@ -1,5 +1,5 @@
 //! Bounded, atomic same-region set transfers. The helper remains a byte relay.
-use super::{sets::MarkerSet, tactical::Marker};
+use super::sets::{MarkerSet, SET_FORMAT, SetFile};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Instant};
@@ -27,17 +27,10 @@ pub(crate) struct Inbox {
     /// The sender of each preview, by set id.
     pub senders: BTreeMap<Uuid, Uuid>,
 }
-pub(crate) fn encode(name: String, markers: Vec<Marker>) -> Result<Vec<String>, ()> {
-    if markers.len() > 256 || markers.iter().any(|m| !m.valid()) || name.len() > 128 {
-        return Err(());
-    }
+/// A set as the parts sent to residents (the set format, in pieces of 200 bytes).
+pub(crate) fn encode(file: &SetFile) -> Result<Vec<String>, ()> {
     let transfer = Uuid::new_v4();
-    let bytes = serde_json::to_vec(&MarkerSet {
-        id: transfer,
-        name,
-        markers,
-    })
-    .map_err(|_| ())?;
+    let bytes = file.to_bytes()?;
     let count = bytes.len().div_ceil(200);
     if count > MAX_PARTS {
         return Err(());
@@ -47,7 +40,7 @@ pub(crate) fn encode(name: String, markers: Vec<Marker>) -> Result<Vec<String>, 
         .enumerate()
         .map(|(index, data)| {
             serde_json::to_string(&Chunk {
-                version: 3,
+                version: SET_FORMAT,
                 transfer,
                 index,
                 count,
@@ -66,7 +59,7 @@ impl Inbox {
     }
     pub fn accept(&mut self, sender: Uuid, chunk: Chunk, now: Instant) -> Result<(), ()> {
         if sender.is_nil()
-            || chunk.version != 3
+            || chunk.version != SET_FORMAT
             || chunk.transfer.is_nil()
             || chunk.count == 0
             || chunk.count > MAX_PARTS
@@ -102,17 +95,16 @@ impl Inbox {
         }
         let bytes: Vec<u8> = pending.parts.iter().flatten().flatten().copied().collect();
         self.pending.remove(&key);
-        let set: MarkerSet = serde_json::from_slice(&bytes).map_err(|_| ())?;
-        if set.id != chunk.transfer
-            || set.name.len() > 128
-            || set.name.chars().any(char::is_control)
-            || set.markers.len() > 256
-            || set.markers.iter().any(|m| !m.valid())
-            || self.previews.len() >= 8
-            || self.completed.len() >= 512
-        {
+        let file = SetFile::from_bytes(&bytes).ok_or(())?;
+        if self.previews.len() >= 8 || self.completed.len() >= 512 {
             return Err(());
         }
+        let set = MarkerSet {
+            id: chunk.transfer,
+            name: file.name,
+            markers: file.markers,
+            layers: file.layers,
+        };
         self.completed.insert(key, now);
         self.senders.insert(set.id, sender);
         self.previews.push(set);
@@ -129,7 +121,7 @@ mod tests {
         for n in 0..40 {
             cfg.add_marker([n as f64, 2.0, 3.0]);
         }
-        let parts = encode("Objectives".into(), cfg.markers.clone()).expect("encode");
+        let parts = encode(&SetFile::new("Objectives".into(), cfg.layers.clone(), cfg.markers.clone())).expect("encode");
         assert!(parts.len() > 1 && parts.iter().all(|p| p.len() <= 480));
         let sender = Uuid::new_v4();
         let now = Instant::now();
@@ -163,7 +155,7 @@ mod tests {
         let mut inbox = Inbox::default();
         let sender = Uuid::new_v4();
         let mut chunk = Chunk {
-            version: 3,
+            version: SET_FORMAT,
             transfer: Uuid::new_v4(),
             index: 0,
             count: 513,
@@ -175,5 +167,29 @@ mod tests {
         chunk.data = STANDARD.encode(b"b");
         assert!(inbox.accept(sender, chunk, Instant::now()).is_err());
         assert!(inbox.previews.is_empty());
+    }
+
+    #[test]
+    fn the_old_transfer_format_is_not_taken_in() {
+        let mut cfg = super::super::tactical::Settings::default();
+        cfg.add_marker([1.0, 2.0, 3.0]);
+        let parts = encode(&SetFile::new("x".into(), cfg.layers.clone(), cfg.markers.clone())).expect("encode");
+        let mut inbox = Inbox::default();
+        let sender = Uuid::new_v4();
+        for part in &parts {
+            let mut chunk: Chunk = serde_json::from_str(part).expect("chunk");
+            assert_eq!(chunk.version, SET_FORMAT);
+            chunk.version = 3;
+            assert!(inbox.accept(sender, chunk, Instant::now()).is_err(), "version 3 is refused");
+        }
+        assert!(inbox.previews.is_empty());
+    }
+
+    #[test]
+    fn a_set_with_a_layer_it_does_not_have_is_not_sent_or_received() {
+        let mut cfg = super::super::tactical::Settings::default();
+        cfg.add_marker([1.0, 2.0, 3.0]);
+        cfg.markers[0].style.layer = 6;
+        assert!(encode(&SetFile::new("x".into(), cfg.layers.clone(), cfg.markers.clone())).is_err());
     }
 }

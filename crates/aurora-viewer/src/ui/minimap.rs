@@ -116,6 +116,8 @@ pub enum MiniMapAction {
     OpenWorldMap,
     /// "View profile" (LLNetMap::handleShowProfile).
     Profile(Uuid),
+    /// Open the region marker editor (a double click on a marker, or the menu).
+    OpenMarkerEditor,
     /// "About Land" on the parcel under the click (popupShowAboutLand).
     AboutLand(f64, f64),
     /// Chat ring options changed (saved with the color settings).
@@ -171,6 +173,15 @@ pub struct View {
     pub ppm: f32,
     cos: f32,
     sin: f32,
+}
+
+impl crate::ui::combat_annotate::Project for View {
+    fn at(&self, x: f64, y: f64) -> Pos2 {
+        self.to_screen(x, y)
+    }
+    fn ppm(&self) -> f32 {
+        self.ppm
+    }
 }
 
 impl View {
@@ -454,11 +465,7 @@ impl MiniMap {
             opts.tactical.draw = None;
             opts.tactical.drawing_start = None;
             opts.tactical.editing = false;
-            if let Some((original, _, _)) = opts.tactical.edit_drag.take()
-                && let Some(marker) = opts.tactical.markers.iter_mut().find(|m| m.id == original.id)
-            {
-                *marker = original;
-            }
+            opts.tactical.cancel_gesture();
         }
         let drawing = interactive && opts.tactical.draw.is_some();
         let editing = interactive && opts.tactical.editing && !drawing && !ui.input(|i| i.modifiers.shift);
@@ -801,7 +808,10 @@ impl MiniMap {
                             && let Some(marker) = crate::combat::tactical::Marker::drawn(shape, start, point, opts.tactical.colors[2])
                             && opts.tactical.markers.len() < 256
                         {
+                            opts.tactical.sync_history();
+                            let before = opts.tactical.snapshot();
                             opts.tactical.markers.push(marker);
+                            opts.tactical.push_undo(before);
                             opts.tactical.draw = None;
                             opts.tactical.drawing_start = None;
                         }
@@ -815,99 +825,185 @@ impl MiniMap {
 
         if editing {
             let cfg = &mut opts.tactical;
+            cfg.sync_history();
+            let (shift, command) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                if let Some((original, _, _)) = cfg.edit_drag.take()
-                    && let Some(marker) = cfg.markers.iter_mut().find(|m| m.id == original.id)
-                {
-                    *marker = original;
-                }
+                cfg.cancel_gesture();
                 cfg.editing = false;
                 return actions;
             }
-            if let Some(pointer) = resp.interact_pointer_pos() {
-                let (x, y) = view.to_global(pointer);
-                if resp.drag_started() || resp.clicked() || resp.secondary_clicked() {
-                    let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pointer);
-                    let nearest = cfg
-                        .markers
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, m)| {
-                            let center = view.to_screen(m.position[0], m.position[1]);
-                            let endpoint = m
-                                .end
-                                .map(|e| view.to_screen(e[0], e[1]))
-                                .unwrap_or_else(|| view.to_screen(m.position[0] + m.radius as f64, m.position[1]));
-                            let resize = !matches!(
-                                m.shape(),
-                                crate::combat::tactical::Shape::Point | crate::combat::tactical::Shape::Freehand
-                            ) && endpoint.distance(origin) < center.distance(origin);
-                            let distance = if resize {
-                                endpoint.distance(origin)
-                            } else {
-                                center.distance(origin)
-                            };
-                            (distance < 18.0).then_some((i, resize, distance))
-                        })
-                        .min_by(|a, b| a.2.total_cmp(&b.2));
-                    for marker in &mut cfg.markers {
-                        marker.selected = false;
-                    }
-                    if let Some((index, resize, _)) = nearest {
-                        cfg.markers[index].selected = true;
-                        let (start_x, start_y) = view.to_global(origin);
-                        cfg.edit_drag = Some((cfg.markers[index].clone(), [start_x, start_y], resize));
-                    }
-                }
-                if resp.dragged()
-                    && let Some((original, start, resize)) = &cfg.edit_drag
-                    && let Some(marker) = cfg.markers.iter_mut().find(|m| m.id == original.id)
-                {
-                    let mut candidate = original.clone();
-                    if *resize {
-                        if candidate.shape() == crate::combat::tactical::Shape::Circle {
-                            candidate.radius = ((x - candidate.position[0]).hypot(y - candidate.position[1]) as f32).clamp(0.1, 1024.0);
-                        } else if let Some(drawn) = crate::combat::tactical::Marker::drawn(
-                            candidate.shape(),
-                            candidate.position,
-                            [x, y, candidate.position[2]],
-                            candidate.color,
-                        ) {
-                            candidate.end = drawn.end;
-                        }
-                    } else {
-                        for (axis, delta) in [x - start[0], y - start[1]].into_iter().enumerate() {
-                            candidate.position[axis] += delta;
-                            if let Some(end) = &mut candidate.end {
-                                end[axis] += delta;
-                            }
-                            for point in &mut candidate.path {
-                                point[axis] += delta;
-                            }
-                        }
-                    }
-                    if candidate.valid() {
-                        *marker = candidate;
-                    }
+            let can_edit = |cfg: &crate::combat::tactical::Settings, m: &crate::combat::tactical::Marker| cfg.shown(m) && !cfg.frozen(m);
+            if resp.hovered() && cfg.edit_drag.is_none() {
+                let pressed = |key| ui.input(|i| i.key_pressed(key));
+                if command && pressed(egui::Key::Z) && !shift {
+                    cfg.undo();
+                } else if command && (pressed(egui::Key::Y) || (shift && pressed(egui::Key::Z))) {
+                    cfg.redo();
+                } else if pressed(egui::Key::Delete) && cfg.markers.iter().any(|m| m.selected && can_edit(cfg, m)) {
+                    let before = cfg.snapshot();
+                    let keep: Vec<_> = cfg.markers.iter().filter(|m| !(m.selected && can_edit(cfg, m))).cloned().collect();
+                    cfg.markers = keep;
+                    cfg.push_undo(before);
                 }
             }
-            if resp.drag_stopped() {
-                cfg.edit_drag = None;
+            let press = (resp.drag_started_by(egui::PointerButton::Primary)
+                || resp.clicked_by(egui::PointerButton::Primary)
+                || resp.secondary_clicked())
+            .then(|| ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos()))
+            .flatten();
+            if let Some(at) = press {
+                let primary = !resp.secondary_clicked();
+                // a handle of the only selected marker, else a marker, else a miss
+                let single = cfg.markers.iter().filter(|m| m.selected).count() == 1;
+                let handle = cfg.markers.iter().find(|m| m.selected && single && can_edit(cfg, m)).and_then(|m| {
+                    crate::ui::combat_annotate::handle_at(&view, m, at)
+                        .filter(|h| !matches!(h, crate::ui::combat_annotate::Handle::Edge(_)))
+                        .map(|h| (h, m.clone()))
+                });
+                if let Some((handle, original)) = handle.filter(|_| primary) {
+                    cfg.edit_drag = Some(crate::combat::tactical::EditGesture::Handle {
+                        handle,
+                        original,
+                        before: cfg.snapshot(),
+                    });
+                } else {
+                    let hit = crate::ui::combat_annotate::pick(&view, cfg.markers.iter().filter(|m| can_edit(cfg, m)), at);
+                    match hit {
+                        Some(id) => {
+                            let was = cfg.markers.iter().any(|m| m.id == id && m.selected);
+                            if shift && primary {
+                                if let Some(m) = cfg.markers.iter_mut().find(|m| m.id == id) {
+                                    m.selected = !was;
+                                }
+                            } else if !was {
+                                for m in &mut cfg.markers {
+                                    m.selected = m.id == id;
+                                }
+                            }
+                            let (x, y) = view.to_global(at);
+                            let originals: Vec<_> = cfg.markers.iter().filter(|m| m.selected && can_edit(cfg, m)).cloned().collect();
+                            if primary && !originals.is_empty() {
+                                cfg.edit_drag = Some(crate::combat::tactical::EditGesture::Move {
+                                    start: [x, y],
+                                    originals,
+                                    before: cfg.snapshot(),
+                                });
+                            }
+                        }
+                        None if primary && !shift => {
+                            for m in &mut cfg.markers {
+                                m.selected = false;
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                if resp.double_clicked_by(egui::PointerButton::Primary)
+                    && crate::ui::combat_annotate::pick(&view, cfg.markers.iter().filter(|m| can_edit(cfg, m)), at).is_some()
+                {
+                    cfg.edit_drag = None;
+                    actions.push(MiniMapAction::OpenMarkerEditor);
+                }
+            }
+            if resp.dragged_by(egui::PointerButton::Primary)
+                && let Some(pointer) = resp.interact_pointer_pos()
+            {
+                let (x, y) = view.to_global(pointer);
+                match cfg.edit_drag.clone() {
+                    Some(crate::combat::tactical::EditGesture::Move { start, originals, .. }) => {
+                        for original in &originals {
+                            if let Some(m) = cfg.markers.iter_mut().find(|m| m.id == original.id) {
+                                *m = original.clone();
+                                crate::ui::combat_annotate::translate(m, x - start[0], y - start[1]);
+                            }
+                        }
+                    }
+                    Some(crate::combat::tactical::EditGesture::Handle { handle, original, .. }) => {
+                        if let Some(m) = cfg.markers.iter_mut().find(|m| m.id == original.id) {
+                            crate::ui::combat_annotate::drag_handle(m, &original, handle, [x, y], shift, shift);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            if resp.drag_stopped_by(egui::PointerButton::Primary)
+                || (cfg.edit_drag.is_some() && resp.clicked_by(egui::PointerButton::Primary))
+            {
+                if let Some(gesture) = cfg.edit_drag.take() {
+                    let before = gesture.before().clone();
+                    if before.markers != cfg.markers {
+                        cfg.push_undo(before);
+                    }
+                }
                 cfg.save_set();
             }
+            // the selection: a frame around each, handles on the only one
             for marker in cfg.markers.iter().filter(|m| m.selected) {
-                let at = view.to_screen(marker.position[0], marker.position[1]);
-                painter.circle_stroke(at, 12.0, Stroke::new(2.0, p.violet));
-                if let Some(end) = marker.end {
-                    painter.circle_stroke(view.to_screen(end[0], end[1]), 6.0, Stroke::new(2.0, p.violet));
+                if let Some((lo, hi)) = crate::ui::combat_annotate::bounds(marker) {
+                    let r = Rect::from_two_pos(view.to_screen(lo[0], lo[1]), view.to_screen(hi[0], hi[1])).expand(8.0);
+                    painter.rect_stroke(r, 0.0, Stroke::new(1.0, p.violet_light), egui::StrokeKind::Outside);
                 }
             }
-            resp.context_menu(|ui| {
-                if let Some(marker) = cfg.markers.iter_mut().find(|m| m.selected) {
-                    ui.text_edit_singleline(&mut marker.name);
-                    crate::ui::widgets::color_button(ui, p, "marker-edit-color", &mut marker.color, true);
+            if let [marker] = cfg.markers.iter().filter(|m| m.selected).collect::<Vec<_>>().as_slice() {
+                for (handle, at) in crate::ui::combat_annotate::handles(&view, marker) {
+                    if matches!(handle, crate::ui::combat_annotate::Handle::Edge(_)) {
+                        continue;
+                    }
+                    let r = Rect::from_center_size(at, vec2(8.0, 8.0));
+                    painter.rect_filled(r, 0.0, p.ink);
+                    painter.rect_stroke(r, 0.0, Stroke::new(1.5, p.violet), egui::StrokeKind::Outside);
                 }
+            }
+            let z = world.agent.position.z as f64;
+            let (hx, hy) = resp.hover_pos().map_or((0.0, 0.0), |at| view.to_global(at));
+            resp.context_menu(|ui| {
+                let mut open_editor = false;
+                let mut duplicate = false;
+                let mut delete = false;
+                if let Some(marker) = cfg.markers.iter_mut().find(|m| m.selected) {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut marker.name)
+                            .char_limit(128)
+                            .hint_text(aurora_i18n::tr!("combat-editor-name-hint")),
+                    );
+                    crate::ui::widgets::color_button(ui, p, "marker-edit-color", &mut marker.color, true);
+                    duplicate = menu::item(ui, p, "copy-filled", aurora_i18n::tr!("combat-editor-duplicate"));
+                    delete = menu::item(ui, p, "trash-filled", aurora_i18n::tr!("tactical-remove"));
+                } else {
+                    if menu::item(ui, p, "map-pin-filled", aurora_i18n::tr!("combat-minimap-add-pin")) {
+                        cfg.place_marker(crate::combat::tactical::Shape::Pin, [hx, hy, z]);
+                    }
+                    if menu::item(ui, p, "circle-filled", aurora_i18n::tr!("combat-minimap-add-point")) {
+                        cfg.place_marker(crate::combat::tactical::Shape::Point, [hx, hy, z]);
+                    }
+                }
+                open_editor |= menu::item(ui, p, "pencil-filled", aurora_i18n::tr!("combat-editor-open"));
                 menu::toggle(ui, p, "edit", aurora_i18n::tr!("tactical-edit"), &mut cfg.editing);
+                if duplicate {
+                    let before = cfg.snapshot();
+                    let copies: Vec<_> = cfg.markers.iter().filter(|m| m.selected).cloned().collect();
+                    for m in &mut cfg.markers {
+                        m.selected = false;
+                    }
+                    for mut m in copies {
+                        if cfg.markers.len() >= 256 {
+                            break;
+                        }
+                        m.id = Uuid::new_v4();
+                        m.selected = true;
+                        crate::ui::combat_annotate::translate(&mut m, 4.0, -4.0);
+                        cfg.markers.push(m);
+                    }
+                    cfg.push_undo(before);
+                }
+                if delete {
+                    let before = cfg.snapshot();
+                    cfg.markers.retain(|m| !m.selected);
+                    cfg.push_undo(before);
+                }
+                if open_editor {
+                    actions.push(MiniMapAction::OpenMarkerEditor);
+                }
             });
             return actions;
         }
@@ -984,8 +1080,15 @@ impl MiniMap {
                 ui.close();
                 return;
             };
-            if opts.tactical.available() && opts.tactical.enabled && menu::item(ui, p, "map-pin-filled", aurora_i18n::tr!("tactical-add")) {
-                opts.tactical.add_marker([px, py, world.agent.position.z as f64]);
+            if opts.tactical.available() && opts.tactical.enabled {
+                if menu::item(ui, p, "map-pin-filled", aurora_i18n::tr!("combat-minimap-add-pin")) {
+                    opts.tactical
+                        .place_marker(crate::combat::tactical::Shape::Pin, [px, py, world.agent.position.z as f64]);
+                }
+                if menu::item(ui, p, "circle-filled", aurora_i18n::tr!("combat-minimap-add-point")) {
+                    opts.tactical
+                        .place_marker(crate::combat::tactical::Shape::Point, [px, py, world.agent.position.z as f64]);
+                }
             }
             if opts.tactical.available() && opts.tactical.pings_enabled {
                 for kind in 0..4 {
@@ -1321,7 +1424,9 @@ impl MiniMap {
         world: &World,
         tiles: &mut MapTiles,
         opts: &MapSettings,
+        layers: (bool, bool),
     ) -> Vec<RegionImage> {
+        let _ = opts;
         let Some(region) = world.main() else {
             return Vec::new();
         };
@@ -1351,7 +1456,7 @@ impl MiniMap {
         let side = width.max(height) as f32;
         let center = (ox as f64 + width / 2.0, oy as f64 + height / 2.0);
         let tpm = 512.0 / side;
-        for (objects, enabled) in [(true, opts.mini_objects), (false, opts.mini_property_lines)] {
+        for (objects, enabled) in [(true, layers.0), (false, layers.1)] {
             let cache = if objects {
                 &mut self.editor_objects
             } else {
@@ -1401,6 +1506,49 @@ impl MiniMap {
     pub fn prune(&mut self, world: &World) {
         self.terrain.retain(|h, _| world.regions.contains_key(h));
     }
+}
+
+/// The region as pictures `side` pixels wide for the exported map: height
+/// shaded terrain (opaque), then the objects and the parcel lines when asked.
+pub(crate) fn export_rasters(
+    world: &World,
+    side: usize,
+    objects: bool,
+    parcels: bool,
+    opts: &MapSettings,
+) -> Option<Vec<egui::ColorImage>> {
+    let region = world.main()?;
+    let (ox, oy) = aurora_net::handle_to_origin(region.handle);
+    let (w, h) = (region.heightmap.size_x as f32, region.heightmap.size_y as f32);
+    let side_m = w.max(h);
+    let water = region.info.as_ref().map(|i| i.water_height).unwrap_or(20.0);
+    let metres = |i: usize| i as f32 * side_m / side as f32;
+    let mut terrain = Vec::with_capacity(side * side);
+    for j in 0..side {
+        for i in 0..side {
+            // image row 0 is north
+            let (x, y) = (metres(i), metres(side - 1 - j));
+            let z = region.heightmap.sample(x, y);
+            let base = terrain_color(z, water);
+            // light from the north-west: slopes facing it brighten
+            let slope = (region.heightmap.sample(x - 1.0, y) - region.heightmap.sample(x + 1.0, y) + region.heightmap.sample(x, y + 1.0)
+                - region.heightmap.sample(x, y - 1.0))
+                * 0.12;
+            let shade = if z < water { 1.0 } else { (1.0 + slope).clamp(0.72, 1.28) };
+            let lit = |c: u8| (f32::from(c) * shade).clamp(0.0, 255.0) as u8;
+            terrain.push(Color32::from_rgb(lit(base.r()), lit(base.g()), lit(base.b())));
+        }
+    }
+    let mut out = vec![egui::ColorImage::new([side, side], terrain)];
+    let center = (ox as f64 + f64::from(w) / 2.0, oy as f64 + f64::from(h) / 2.0);
+    let tpm = side as f32 / side_m;
+    if objects {
+        out.push(rasterize_objects(world, center, side, tpm, opts));
+    }
+    if parcels {
+        out.push(rasterize_parcels(world, center, side, tpm, opts.mini_for_sale, opts.mini_collision));
+    }
+    Some(out)
 }
 
 pub(crate) struct RegionImage {

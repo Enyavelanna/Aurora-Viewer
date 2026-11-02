@@ -22,6 +22,22 @@ impl CombatWindow {
     pub fn open_editor(&mut self) {
         self.editor.open = true;
     }
+    /// A picture of the map the person asked for, once.
+    pub fn take_export(&mut self) -> Option<super::combat_editor::ExportJob> {
+        self.editor.take_export()
+    }
+    /// Whether the editor's background shows the objects and the parcel lines.
+    pub fn map_layers(&self) -> (bool, bool) {
+        self.editor.map_layers()
+    }
+    pub fn show_editor_layers(&mut self) {
+        self.editor.open = true;
+        self.editor.show_layers();
+    }
+    pub fn show_editor_set(&mut self) {
+        self.editor.open = true;
+        self.editor.show_set();
+    }
     pub fn show(
         &mut self,
         ctx: &egui::Context,

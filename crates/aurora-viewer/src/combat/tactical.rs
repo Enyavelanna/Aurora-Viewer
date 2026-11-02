@@ -1,10 +1,7 @@
 //! Persistent global map annotations and short-lived, explicitly shared pings.
 use crate::{
     theme::Palette,
-    ui::{
-        minimap::{View, text_shadow},
-        widgets,
-    },
+    ui::{minimap::View, widgets},
     world::World,
 };
 use aurora_i18n::tr;
@@ -22,16 +19,18 @@ pub(crate) enum Shape {
     Line,
     Rectangle,
     Freehand,
+    /// A closed area of three or more corners (`path`).
+    Polygon,
+    /// A line from `position` to `end` with an arrowhead.
+    Arrow,
+    /// A path with an arrowhead at its last point.
+    Route,
+    /// Free text: the marker's name, at `position`.
+    Text,
+    /// A numbered or lettered pin with an icon.
+    Pin,
 }
 impl Shape {
-    pub const ALL: [Self; 4] = [Self::Circle, Self::Rectangle, Self::Line, Self::Freehand];
-    pub fn tool(self) -> Self {
-        match self {
-            Self::Point => Self::Circle,
-            Self::Square => Self::Rectangle,
-            other => other,
-        }
-    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Point | Self::Circle => tr!("combat-editor-round"),
@@ -39,7 +38,185 @@ impl Shape {
             Self::Line => tr!("tactical-line"),
             Self::Rectangle => tr!("combat-editor-rectangle"),
             Self::Freehand => tr!("combat-editor-freehand"),
+            Self::Polygon => tr!("combat-editor-polygon"),
+            Self::Arrow => tr!("combat-editor-arrow"),
+            Self::Route => tr!("combat-editor-route"),
+            Self::Text => tr!("combat-editor-text"),
+            Self::Pin => tr!("combat-editor-pin"),
         }
+    }
+    /// Closed areas: filled, hatched, picked by their inside.
+    pub fn is_area(self) -> bool {
+        matches!(self, Self::Circle | Self::Point | Self::Square | Self::Rectangle | Self::Polygon)
+    }
+}
+
+/// How a line is drawn.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum Dash {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+/// The look of a marker, beyond its colour. Every field has a default that
+/// reads as the markers of the first version, and a default style is not
+/// written, so an old file loads unchanged and a set stays small to send.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct Style {
+    /// Opacity of the fill, percent of the colour's own opacity.
+    pub fill: u8,
+    /// Stroke width, pixels.
+    pub width: f32,
+    pub dash: Dash,
+    /// Text size, pixels.
+    pub text_size: f32,
+    /// The name is drawn on the map.
+    pub label: bool,
+    /// Tabler icon of a pin.
+    pub icon: String,
+    /// One to three characters on a pin (A, B, 1, 2...).
+    pub badge: String,
+    /// Rotation of a rectangle about its centre, degrees.
+    pub angle: f32,
+    /// Index in the set's layers.
+    pub layer: u8,
+    /// Hidden from the map (its own eye, besides the layer's).
+    pub hidden: bool,
+    /// Cannot be picked or moved (its own lock, besides the layer's).
+    pub locked: bool,
+    /// Where the name sits, metres from where it would by default.
+    pub label_dx: f32,
+    pub label_dy: f32,
+}
+impl Default for Style {
+    fn default() -> Self {
+        Self {
+            fill: 15,
+            width: 2.0,
+            dash: Dash::Solid,
+            text_size: 12.0,
+            label: true,
+            icon: String::new(),
+            badge: String::new(),
+            angle: 0.0,
+            layer: 0,
+            hidden: false,
+            locked: false,
+            label_dx: 0.0,
+            label_dy: 0.0,
+        }
+    }
+}
+impl Style {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    pub fn valid(&self) -> bool {
+        self.fill <= 100
+            && self.width.is_finite()
+            && (0.5..=12.0).contains(&self.width)
+            && self.text_size.is_finite()
+            && (6.0..=64.0).contains(&self.text_size)
+            && self.angle.is_finite()
+            && self.angle.abs() <= 360.0
+            && usize::from(self.layer) < MAX_LAYERS
+            && self.label_dx.is_finite()
+            && self.label_dy.is_finite()
+            && self.label_dx.abs() <= 512.0
+            && self.label_dy.abs() <= 512.0
+            && self.badge.chars().count() <= 3
+            && !self.badge.chars().any(char::is_control)
+            && self.icon.len() <= 40
+            && self.icon.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    }
+}
+
+/// What undo brings back: the markers and the layers of the active set.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Snapshot {
+    pub markers: Vec<Marker>,
+    pub layers: Vec<Layer>,
+}
+
+/// Undo and redo, for the set under edit. It is not part of the settings'
+/// identity: a copy of the settings starts without one, and two settings
+/// compare equal whatever their histories.
+#[derive(Debug, Default)]
+pub(crate) struct History {
+    pub undo: Vec<Snapshot>,
+    pub redo: Vec<Snapshot>,
+    /// The region and set the history belongs to.
+    pub of: Option<(super::sets::RegionKey, Option<Uuid>)>,
+}
+impl Clone for History {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+impl PartialEq for History {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+/// How many steps undo keeps.
+const UNDO_STEPS: usize = 200;
+
+/// A drag on the minimap while editing: what moves, and the state to go
+/// back to (undo, or Escape).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum EditGesture {
+    Move {
+        start: [f64; 2],
+        originals: Vec<Marker>,
+        before: Snapshot,
+    },
+    Handle {
+        handle: crate::ui::combat_annotate::Handle,
+        original: Marker,
+        before: Snapshot,
+    },
+}
+impl EditGesture {
+    pub fn before(&self) -> &Snapshot {
+        match self {
+            Self::Move { before, .. } | Self::Handle { before, .. } => before,
+        }
+    }
+}
+
+/// How many layers a set may hold.
+pub(crate) const MAX_LAYERS: usize = 8;
+
+/// A named group of markers that can be hidden or locked together.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct Layer {
+    pub name: String,
+    pub visible: bool,
+    pub locked: bool,
+}
+impl Default for Layer {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            visible: true,
+            locked: false,
+        }
+    }
+}
+impl Layer {
+    /// The layers a new set starts with.
+    pub fn defaults() -> Vec<Layer> {
+        [tr!("combat-layer-zones"), tr!("combat-layer-routes"), tr!("combat-layer-callouts")]
+            .into_iter()
+            .map(|name| Layer {
+                name: name.into(),
+                ..Layer::default()
+            })
+            .collect()
     }
 }
 
@@ -59,6 +236,8 @@ pub(crate) struct Marker {
     pub path: Vec<[f64; 3]>,
     #[serde(default)]
     pub hatched: bool,
+    #[serde(default, skip_serializing_if = "Style::is_default")]
+    pub style: Style,
 }
 
 impl Marker {
@@ -81,11 +260,17 @@ impl Marker {
             && self.path.len() <= 128
             && self.path.iter().all(coordinate)
             && (self.shape != Shape::Freehand || self.path.len() >= 2)
-            && (!matches!(self.shape(), Shape::Square | Shape::Line | Shape::Rectangle)
+            && (self.shape != Shape::Route || (2..=128).contains(&self.path.len()))
+            && (self.shape != Shape::Polygon || (3..=64).contains(&self.path.len()))
+            && (!matches!(self.shape(), Shape::Square | Shape::Line | Shape::Rectangle | Shape::Arrow)
                 || self
                     .end
                     .is_some_and(|end| (end[0] - self.position[0]).abs() <= 1024.0 && (end[1] - self.position[1]).abs() <= 1024.0))
+            && (!matches!(self.shape, Shape::Polygon | Shape::Route | Shape::Freehand)
+                || crate::ui::combat_annotate::extent(&self.path) <= 1024.0)
+            && self.style.valid()
     }
+    /// A marker of `shape` from a drag: `Rectangle`, `Square`, `Line`, `Arrow`.
     pub fn drawn(shape: Shape, position: [f64; 3], mut end: [f64; 3], color: [u8; 4]) -> Option<Self> {
         let dx = end[0] - position[0];
         let dy = end[1] - position[1];
@@ -99,7 +284,7 @@ impl Marker {
         }
         let m = Self {
             id: Uuid::new_v4(),
-            name: shape.label().into(),
+            name: String::new(),
             position,
             radius: 0.0,
             color,
@@ -118,7 +303,6 @@ pub(crate) struct Ping {
     pub kind: usize,
     pub at: Instant,
     pub sender: Uuid,
-    pub compatible: bool,
     pub responders: std::collections::BTreeSet<Uuid>,
     pub recipients: std::collections::BTreeSet<Uuid>,
     pub acknowledged: bool,
@@ -240,6 +424,12 @@ pub(crate) struct Settings {
     pub outline_width: f32,
     pub player_colors: BTreeMap<Uuid, [u8; 4]>,
     pub markers: Vec<Marker>,
+    /// The active set's layers (kept with the set, like `markers`).
+    #[serde(skip)]
+    pub layers: Vec<Layer>,
+    /// Undo and redo of the active set, shared by the editor and the minimap.
+    #[serde(skip)]
+    pub history: History,
     pub colors: [[u8; 4]; 4],
     pub icons: [String; 4],
     pub seconds: f32,
@@ -272,7 +462,7 @@ pub(crate) struct Settings {
     #[serde(skip)]
     pub pings: Vec<Ping>,
     #[serde(skip)]
-    pub outgoing: Vec<(Marker, Option<usize>)>,
+    pub outgoing: Vec<(Marker, usize)>,
     #[serde(skip)]
     pub sound_pending: bool,
     pub fixed_center: bool,
@@ -281,7 +471,7 @@ pub(crate) struct Settings {
     #[serde(skip)]
     pub editing: bool,
     #[serde(skip)]
-    pub edit_drag: Option<(Marker, [f64; 2], bool)>,
+    pub edit_drag: Option<EditGesture>,
     #[serde(skip)]
     pub drawing_start: Option<[f64; 3]>,
     #[serde(skip)]
@@ -323,6 +513,8 @@ impl Default for Settings {
             outline_width: 1.5,
             player_colors: BTreeMap::new(),
             markers: Vec::new(),
+            layers: Layer::defaults(),
+            history: History::default(),
             colors: [[90, 180, 255, 255], [255, 70, 70, 255], [255, 200, 60, 255], [80, 240, 160, 255]],
             icons: ["map-pin-filled", "user-filled", "map-pin-filled", "users-group"].map(str::to_owned),
             seconds: 8.0,
@@ -420,6 +612,144 @@ impl Settings {
     pub fn available(&self) -> bool {
         self.tools_enabled && self.combat_enabled
     }
+    pub fn layer_visible(&self, m: &Marker) -> bool {
+        self.layers.get(usize::from(m.style.layer)).is_none_or(|l| l.visible)
+    }
+    pub fn layer_locked(&self, m: &Marker) -> bool {
+        self.layers.get(usize::from(m.style.layer)).is_some_and(|l| l.locked)
+    }
+    /// Drops a drag under way, putting the markers back as they were.
+    pub fn cancel_gesture(&mut self) {
+        if let Some(gesture) = self.edit_drag.take() {
+            let before = gesture.before().clone();
+            (self.markers, self.layers) = (before.markers, before.layers);
+        }
+    }
+    /// The next unused letter, then number, for a pin's badge.
+    pub fn next_badge(&self) -> String {
+        let used: std::collections::BTreeSet<&str> = self
+            .markers
+            .iter()
+            .filter(|m| m.shape == Shape::Pin)
+            .map(|m| m.style.badge.as_str())
+            .collect();
+        ('A'..='Z')
+            .map(|c| c.to_string())
+            .chain((1..=99).map(|n| n.to_string()))
+            .find(|b| !used.contains(b.as_str()))
+            .unwrap_or_default()
+    }
+    /// Puts a nameless marker (`Point` or `Pin`) on the map, selected, as one
+    /// undo step: the minimap's quick placement.
+    pub fn place_marker(&mut self, shape: Shape, position: [f64; 3]) {
+        if self.markers.len() >= 256 {
+            return;
+        }
+        self.sync_history();
+        let before = self.snapshot();
+        let mut m = Marker {
+            id: Uuid::new_v4(),
+            position,
+            color: self.colors[2],
+            shape,
+            selected: true,
+            ..Marker::default()
+        };
+        if shape == Shape::Pin {
+            m.style.badge = self.next_badge();
+            m.style.icon = "map-pin-filled".into();
+        }
+        for other in &mut self.markers {
+            other.selected = false;
+        }
+        self.markers.push(m);
+        self.push_undo(before);
+    }
+    /// On the map: its layer and itself are not hidden.
+    pub fn shown(&self, m: &Marker) -> bool {
+        self.layer_visible(m) && !m.style.hidden
+    }
+    /// Fixed in place: its layer or itself is locked.
+    pub fn frozen(&self, m: &Marker) -> bool {
+        self.layer_locked(m) || m.style.locked
+    }
+    /// The markers to draw, back to front: by layer, then in the set's order.
+    pub fn draw_order(&self) -> Vec<&Marker> {
+        let top = self.layers.len().saturating_sub(1);
+        let mut shown: Vec<&Marker> = self.markers.iter().filter(|m| self.shown(m)).collect();
+        shown.sort_by_key(|m| usize::from(m.style.layer).min(top));
+        shown
+    }
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            markers: self.markers.clone(),
+            layers: self.layers.clone(),
+        }
+    }
+    /// Starts a history for the set now active; an older one is dropped.
+    pub fn sync_history(&mut self) {
+        let of = self.current_region.clone().map(|key| {
+            let active = self.library.regions.iter().find(|r| r.key == key).and_then(|r| r.active);
+            (key, active)
+        });
+        if self.history.of != of {
+            self.history = History { of, ..History::default() };
+        }
+    }
+    /// Remembers `before`, the state a change started from.
+    pub fn push_undo(&mut self, before: Snapshot) {
+        if self.history.undo.len() == UNDO_STEPS {
+            self.history.undo.remove(0);
+        }
+        self.history.undo.push(before);
+        self.history.redo.clear();
+    }
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.history.undo.pop() else {
+            return false;
+        };
+        let now = self.snapshot();
+        self.history.redo.push(now);
+        (self.markers, self.layers) = (previous.markers, previous.layers);
+        true
+    }
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.history.redo.pop() else {
+            return false;
+        };
+        let now = self.snapshot();
+        self.history.undo.push(now);
+        (self.markers, self.layers) = (next.markers, next.layers);
+        true
+    }
+    /// Reads the active set of `region` into the working copy.
+    pub(crate) fn adopt(&mut self, set: Option<&super::sets::MarkerSet>) {
+        self.markers = set.map(|s| s.markers.clone()).unwrap_or_default();
+        self.layers = set
+            .map(|s| s.layers.clone())
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(Layer::defaults);
+    }
+    /// Adds a set read from a file as a new set of this region, which becomes
+    /// the active one; false when there is no region to hold it.
+    pub fn import_set(&mut self, file: super::sets::SetFile) -> bool {
+        let Some(key) = self.current_region.clone() else {
+            return false;
+        };
+        self.save_set();
+        let region = self.library.region_mut(&key, "");
+        let name = if file.name.is_empty() {
+            tr!("tactical-set-default").to_owned()
+        } else {
+            file.name
+        };
+        region.add(name, &file.markers);
+        region.save_layers(&file.layers);
+        let set = region.selected().cloned();
+        self.adopt(set.as_ref());
+        self.sync_history();
+        true
+    }
     /// The active set's name in this region.
     pub fn active_set_name(&self) -> String {
         self.current_region
@@ -436,7 +766,8 @@ impl Settings {
             return;
         }
         let markers = self.markers.iter().filter(|m| !selected_only || m.selected).cloned().collect();
-        match super::transfer::encode(self.active_set_name(), markers) {
+        let file = super::sets::SetFile::new(self.active_set_name(), self.layers.clone(), markers);
+        match super::transfer::encode(&file) {
             Ok(chunks) if self.set_outgoing.len() + chunks.len() <= 512 => {
                 if self.set_outgoing.is_empty() {
                     self.set_total = 0;
@@ -452,14 +783,12 @@ impl Settings {
         if self.current_region.as_ref() == Some(&key) {
             return;
         }
-        if let Some((original, _, _)) = self.edit_drag.take()
-            && let Some(marker) = self.markers.iter_mut().find(|m| m.id == original.id)
-        {
-            *marker = original;
-        }
+        self.cancel_gesture();
         self.editing = false;
         if let Some(previous) = self.current_region.take() {
-            self.library.region_mut(&previous, "").save(&self.markers);
+            let region = self.library.region_mut(&previous, "");
+            region.save(&self.markers);
+            region.save_layers(&self.layers);
         } else if !self.markers.is_empty() {
             self.library.unassigned.append(&mut self.markers);
         }
@@ -467,7 +796,8 @@ impl Settings {
         if region.sets.is_empty() {
             region.add(tr!("tactical-set-default").into(), &[]);
         }
-        self.markers = region.selected().map(|s| s.markers.clone()).unwrap_or_default();
+        let set = region.selected().cloned();
+        self.adopt(set.as_ref());
         self.current_region = Some(key);
         self.draw = None;
         self.drawing_start = None;
@@ -492,6 +822,7 @@ impl Settings {
                 region.add(tr!("tactical-set-default").into(), &self.markers);
             }
             region.save(&self.markers);
+            region.save_layers(&self.layers);
         }
     }
 
@@ -499,7 +830,7 @@ impl Settings {
         if self.markers.len() < 256 {
             self.markers.push(Marker {
                 id: Uuid::new_v4(),
-                name: tr!("tactical-objective").into(),
+                name: String::new(),
                 position,
                 radius: 0.0,
                 color: self.colors[2],
@@ -538,7 +869,7 @@ impl Settings {
             ..Marker::default()
         };
         if self.share && self.send_enabled && self.ping_audience != 0 && self.outgoing.len() < 256 {
-            self.outgoing.push((marker.clone(), Some(kind)));
+            self.outgoing.push((marker.clone(), kind));
         }
         if self.pings.len() >= 64 {
             self.pings.remove(0);
@@ -550,45 +881,31 @@ impl Settings {
         self.pings.push(ping);
         true
     }
-    pub fn accept_shared(&mut self, sender: Uuid, body: Shared, now: Instant) -> bool {
-        if sender.is_nil()
-            || body.version != 2
-            || !body.marker.valid()
-            || self.seen_messages.contains_key(&body.marker.id)
-            || body.kind.is_some_and(|k| k >= 4)
+    /// A ping a peer placed: kept for its few seconds, at most one per peer
+    /// every three seconds.
+    pub fn accept_place(&mut self, sender: Uuid, marker: Marker, kind: usize, now: Instant) -> bool {
+        if sender.is_nil() || kind >= 4 || !marker.valid() || self.seen_messages.contains_key(&marker.id) || !self.pings_enabled {
+            return false;
+        }
+        if self
+            .sender_pings
+            .get(&sender)
+            .is_some_and(|at| now.saturating_duration_since(*at).as_secs_f32() < 3.0)
         {
             return false;
         }
-        if let Some(kind) = body.kind {
-            if !self.pings_enabled
-                || self
-                    .sender_pings
-                    .get(&sender)
-                    .is_some_and(|at| now.saturating_duration_since(*at).as_secs_f32() < 3.0)
-            {
-                return false;
-            }
-            if self.sender_pings.len() >= 512 && !self.sender_pings.contains_key(&sender) {
-                return false;
-            }
-            self.sender_pings.insert(sender, now);
-            if self.pings.len() >= 64 {
-                self.pings.remove(0);
-            }
-            let mut ping = Ping::new(body.marker.clone(), kind, now);
-            ping.sender = sender;
-            ping.compatible = false;
-            self.pings.push(ping);
-            self.sound_pending = true;
-        } else {
-            if !self.enabled || self.markers.len() >= 256 || self.markers.iter().any(|m| m.id == body.marker.id) {
-                return false;
-            }
-            let mut marker = body.marker.clone();
-            marker.selected = false;
-            self.markers.push(marker);
+        if self.sender_pings.len() >= 512 && !self.sender_pings.contains_key(&sender) {
+            return false;
         }
-        self.seen_messages.insert(body.marker.id, now);
+        self.sender_pings.insert(sender, now);
+        if self.pings.len() >= 64 {
+            self.pings.remove(0);
+        }
+        let mut ping = Ping::new(marker.clone(), kind, now);
+        ping.sender = sender;
+        self.pings.push(ping);
+        self.sound_pending = true;
+        self.seen_messages.insert(marker.id, now);
         true
     }
     pub fn prune(&mut self) {
@@ -605,7 +922,7 @@ impl Settings {
             return;
         }
         if self.enabled {
-            for marker in &self.markers {
+            for marker in self.draw_order() {
                 self.paint_map(painter, view, marker);
             }
         }
@@ -628,104 +945,85 @@ impl Settings {
         }
     }
     pub fn paint_map(&self, painter: &egui::Painter, view: &View, m: &Marker) {
-        let at = view.to_screen(m.position[0], m.position[1]);
-        let c = color(m.color);
-        if m.hatched {
-            let polygon = match m.shape() {
-                Shape::Circle => (0..32)
-                    .map(|n| {
-                        let angle = n as f32 * std::f32::consts::TAU / 32.0;
-                        at + egui::vec2(angle.cos(), angle.sin()) * m.radius * view.ppm
-                    })
-                    .collect(),
-                Shape::Square | Shape::Rectangle => m
-                    .end
-                    .map(|end| {
-                        vec![
-                            at,
-                            view.to_screen(end[0], m.position[1]),
-                            view.to_screen(end[0], end[1]),
-                            view.to_screen(m.position[0], end[1]),
-                        ]
-                    })
-                    .unwrap_or_default(),
-                _ => Vec::new(),
-            };
-            hatch(painter, &polygon, c);
-        }
-        match m.shape() {
-            Shape::Circle => {
-                painter.circle(at, m.radius.min(1024.0) * view.ppm, c.gamma_multiply(0.15), Stroke::new(1.5, c));
-            }
-            Shape::Square | Shape::Rectangle => {
-                if let Some(end) = m.end {
-                    let corners = [
-                        at,
-                        view.to_screen(end[0], m.position[1]),
-                        view.to_screen(end[0], end[1]),
-                        view.to_screen(m.position[0], end[1]),
-                    ];
-                    painter.add(egui::Shape::convex_polygon(
-                        corners.to_vec(),
-                        c.gamma_multiply(0.15),
-                        Stroke::new(1.5, c),
-                    ));
-                }
-            }
-            Shape::Line => {
-                if let Some(end) = m.end {
-                    painter.line_segment([at, view.to_screen(end[0], end[1])], Stroke::new(2.0, c));
-                }
-            }
-            Shape::Point => {}
-            Shape::Freehand => {
-                painter.add(egui::Shape::line(
-                    m.path.iter().map(|p| view.to_screen(p[0], p[1])).collect(),
-                    Stroke::new(2.0, c),
-                ));
-            }
-        }
-        painter.circle_stroke(at, self.size.clamp(3.0, 32.0), Stroke::new(2.0, c));
-        if self.labels {
-            text_shadow(
-                painter,
-                at + egui::vec2(0.0, self.size + 3.0),
-                egui::Align2::CENTER_TOP,
-                &m.name,
-                11.0,
-                c,
-            );
-        }
+        crate::ui::combat_annotate::paint(
+            painter,
+            view,
+            m,
+            &crate::ui::combat_annotate::Look {
+                labels: self.labels,
+                point_size: self.size,
+                ..Default::default()
+            },
+        );
     }
 }
-/// Bounded diagonal hatch clipped to a convex zone, including rotated minimaps.
-pub(crate) fn hatch(painter: &egui::Painter, polygon: &[egui::Pos2], color: Color32) {
-    if polygon.len() < 3 {
-        return;
+/// A map of callouts for the offline demo, around `at` (global metres): a
+/// zone, a turned cover, a route, an arrow, two pins, a text and a hatched
+/// circle, on the three default layers.
+pub(crate) fn demo_callouts(at: [f64; 2], z: f64) -> Vec<Marker> {
+    let pt = |dx: f64, dy: f64| [at[0] + dx, at[1] + dy, z];
+    let base = |shape: Shape, name: &str, color: [u8; 4], layer: u8| Marker {
+        id: Uuid::new_v4(),
+        name: name.into(),
+        shape,
+        color,
+        position: pt(0.0, 0.0),
+        style: Style { layer, ..Style::default() },
+        ..Marker::default()
+    };
+    let mut out = Vec::new();
+    let mut bridge = base(Shape::Polygon, "Bridge", [239, 68, 68, 255], 0);
+    bridge.path = vec![
+        pt(-60.0, 30.0),
+        pt(-30.0, 50.0),
+        pt(10.0, 44.0),
+        pt(22.0, 20.0),
+        pt(-8.0, 12.0),
+        pt(-40.0, 8.0),
+    ];
+    bridge.position = bridge.path[0];
+    bridge.style.fill = 28;
+    bridge.style.dash = Dash::Dashed;
+    bridge.style.width = 2.5;
+    bridge.selected = true;
+    out.push(bridge);
+    let mut cover = base(Shape::Rectangle, "Cover", [96, 165, 250, 255], 0);
+    cover.position = pt(30.0, -30.0);
+    cover.end = Some(pt(62.0, -14.0));
+    cover.style.fill = 22;
+    cover.style.angle = 28.0;
+    out.push(cover);
+    let mut yard = base(Shape::Circle, "Yard", [74, 222, 128, 255], 0);
+    yard.position = pt(-50.0, -40.0);
+    yard.radius = 18.0;
+    yard.hatched = true;
+    out.push(yard);
+    let mut attack = base(Shape::Route, "Attack path", [249, 115, 22, 255], 1);
+    attack.path = vec![pt(-80.0, -70.0), pt(-40.0, -62.0), pt(-5.0, -30.0), pt(20.0, 0.0), pt(34.0, 28.0)];
+    attack.position = attack.path[0];
+    attack.style.dash = Dash::Dashed;
+    attack.style.width = 3.0;
+    out.push(attack);
+    let mut flank = base(Shape::Arrow, "Flank", [74, 222, 128, 255], 1);
+    flank.position = pt(70.0, 50.0);
+    flank.end = Some(pt(44.0, 12.0));
+    flank.style.width = 3.0;
+    out.push(flank);
+    for (name, badge, icon, dx, dy, color) in [
+        ("Spawn", "A", "flag-filled", -78.0, -78.0, [74, 222, 128, 255]),
+        ("Objective", "B", "star-filled", 40.0, 36.0, [250, 204, 21, 255]),
+    ] {
+        let mut pin = base(Shape::Pin, name, color, 2);
+        pin.position = pt(dx, dy);
+        pin.style.badge = badge.into();
+        pin.style.icon = icon.into();
+        out.push(pin);
     }
-    let min = polygon.iter().map(|p| p.x + p.y).fold(f32::INFINITY, f32::min);
-    let max = polygon.iter().map(|p| p.x + p.y).fold(f32::NEG_INFINITY, f32::max);
-    let step = ((max - min) / 128.0).max(10.0);
-    for n in 0..=((max - min) / step).ceil() as usize {
-        let value = min + n as f32 * step;
-        let mut points = Vec::new();
-        for i in 0..polygon.len() {
-            let a = polygon[i];
-            let b = polygon[(i + 1) % polygon.len()];
-            let da = a.x + a.y;
-            let db = b.x + b.y;
-            if (db - da).abs() > 0.001 {
-                let t = (value - da) / (db - da);
-                if (0.0..1.0).contains(&t) {
-                    points.push(a + (b - a) * t);
-                }
-            }
-        }
-        points.sort_by(|a, b| a.x.total_cmp(&b.x));
-        if let (Some(a), Some(b)) = (points.first(), points.last()) {
-            painter.line_segment([*a, *b], Stroke::new(1.0, color.gamma_multiply(0.5)));
-        }
-    }
+    let mut text = base(Shape::Text, "MID", [232, 237, 251, 255], 2);
+    text.position = pt(-10.0, 28.0);
+    text.style.text_size = 18.0;
+    out.push(text);
+    out
 }
 
 /// The colour and icon of one ping kind (Pings tab).
@@ -845,119 +1143,46 @@ pub(crate) fn marker_display(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings)
     before != (cfg.editing, cfg.enabled, cfg.labels, cfg.size)
 }
 
-/// Every marker of the active set, one framed block each (Marker sets tab).
+/// The markers of the active set, one line each: a tick to send it, its
+/// colour, its shape, its name, and a button to remove it. Shaping them is
+/// the region editor's job (Marker sets tab).
 pub(crate) fn marker_list(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut Settings) {
+    if ui
+        .add_enabled(context.position.is_some(), egui::Button::new(tr!("tactical-add")))
+        .clicked()
+        && let Some(position) = context.position
     {
-        if ui
-            .add_enabled(context.position.is_some(), egui::Button::new(tr!("tactical-add")))
-            .clicked()
-            && let Some(position) = context.position
-        {
-            cfg.add_marker(position);
-        }
-        let mut remove = None;
-        for (i, m) in cfg.markers.iter_mut().enumerate() {
-            ui.add_space(6.0);
-            ui.push_id(m.id, |ui| {
-                widgets::surface(ui, p, |ui| {
-                    ui.set_width(ui.available_width());
-                    let logical = m.shape().tool();
-                    let mut shape = logical;
-                    egui::ComboBox::from_id_salt("shape")
-                        .selected_text(shape.label())
-                        .show_ui(ui, |ui| {
-                            for value in Shape::ALL {
-                                ui.selectable_value(&mut shape, value, value.label());
-                            }
-                        });
-                    if shape != logical {
-                        m.shape = shape;
-                        m.path.clear();
-                        if shape == Shape::Freehand {
-                            m.path = vec![m.position, [m.position[0] + 8.0, m.position[1] + 8.0, m.position[2]]];
-                        }
-                        if matches!(shape, Shape::Point | Shape::Circle) {
-                            m.radius = 0.0;
-                            m.end = None;
-                        } else {
-                            m.radius = 0.0;
-                            m.end = Some([m.position[0] + 8.0, m.position[1] + 8.0, m.position[2]]);
-                        }
-                    }
-                    ui.horizontal(|ui| {
-                        widgets::switch(ui, p, &mut m.selected);
-                        ui.text_edit_singleline(&mut m.name);
-                        if ui.button(tr!("tactical-remove")).clicked() {
-                            remove = Some(i);
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        widgets::color_button(ui, p, "color", &mut m.color, false);
-                        if m.shape().tool() == Shape::Circle {
-                            ui.add(egui::Slider::new(&mut m.radius, 0.0..=1024.0).text(tr!("combat-editor-radius")));
-                        }
-                        if m.shape() == Shape::Square
-                            && let Some(end) = m.end
-                        {
-                            let dx = end[0] - m.position[0];
-                            let dy = end[1] - m.position[1];
-                            let mut side = dx.abs().max(dy.abs()).clamp(0.1, 1024.0);
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut side)
-                                        .range(0.1..=1024.0)
-                                        .prefix(tr!("tactical-square-side")),
-                                )
-                                .changed()
-                            {
-                                m.end = Some([
-                                    m.position[0] + side * if dx < 0.0 { -1.0 } else { 1.0 },
-                                    m.position[1] + side * if dy < 0.0 { -1.0 } else { 1.0 },
-                                    end[2],
-                                ]);
-                            }
-                        }
-                    });
-                    let previous_position = m.position;
-                    ui.label(tr!("tactical-position"));
-                    ui.horizontal(|ui| {
-                        let width = ((ui.available_width() - ui.spacing().item_spacing.x * 2.0) / 3.0).max(48.0);
-                        for coordinate in &mut m.position {
-                            ui.add_sized([width, 24.0], egui::DragValue::new(coordinate).speed(0.1).max_decimals(2));
-                        }
-                    });
-                    if previous_position != m.position
-                        && let Some(end) = &mut m.end
-                    {
-                        for i in 0..3 {
-                            end[i] += m.position[i] - previous_position[i];
-                        }
-                    }
-                    if previous_position != m.position {
-                        for point in &mut m.path {
-                            for axis in 0..3 {
-                                point[axis] += m.position[axis] - previous_position[axis];
-                            }
-                        }
-                    }
-                    if m.shape() != Shape::Square
-                        && let Some(end) = &mut m.end
-                    {
-                        ui.label(tr!("tactical-end"));
-                        ui.horizontal(|ui| {
-                            for value in end {
-                                ui.add(egui::DragValue::new(value).speed(0.1));
-                            }
-                        });
-                    }
-                })
-            });
-        }
-        if let Some(i) = remove {
-            cfg.markers.remove(i);
-        }
-        cfg.save_set();
+        cfg.place_marker(Shape::Pin, position);
     }
+    ui.add_space(4.0);
+    let mut remove = None;
+    for (i, m) in cfg.markers.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            widgets::checkbox(ui, p, &mut m.selected, "").on_hover_text(tr!("tactical-send-tick"));
+            widgets::color_button(ui, p, ("marker-list-color", m.id), &mut m.color, true);
+            if let Some(icon) = crate::ui::icons::global(crate::ui::combat_editor::shape_icon(m.shape())) {
+                ui.add(egui::Image::new((icon.id(), egui::Vec2::splat(14.0))).tint(p.muted));
+            }
+            let room = (ui.available_width() - 34.0).max(60.0);
+            let hint = m.shape().label();
+            ui.add(
+                egui::TextEdit::singleline(&mut m.name)
+                    .char_limit(128)
+                    .hint_text(hint)
+                    .desired_width(room),
+            );
+            if widgets::icon_button(ui, p, "trash-filled", tr!("tactical-remove"), true) {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        cfg.sync_history();
+        let before = cfg.snapshot();
+        cfg.markers.remove(i);
+        cfg.push_undo(before);
+    }
+    cfg.save_set();
 }
 
 pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
@@ -985,16 +1210,19 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
         if ui.button(tr!("tactical-set-duplicate")).clicked() {
             let name = region.selected().map(|s| s.name.clone()).unwrap_or_default();
             region.add(name, &cfg.markers);
+            region.save_layers(&cfg.layers);
         }
         if ui.button(tr!("tactical-remove")).clicked() {
             region.remove_active();
         }
         if ui.button(tr!("tactical-set-save")).clicked() {
             region.save(&cfg.markers);
+            region.save_layers(&cfg.layers);
         }
     });
     if region.active != previous {
-        cfg.markers = region.selected().map(|s| s.markers.clone()).unwrap_or_default();
+        let set = region.selected().cloned();
+        cfg.adopt(set.as_ref());
         cfg.draw = None;
         cfg.drawing_start = None;
     }
@@ -1005,17 +1233,11 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
                 let markers = std::mem::take(&mut cfg.library.unassigned);
                 let region = cfg.library.region_mut(&key, "");
                 region.add(tr!("tactical-set-unassigned").into(), &markers);
-                cfg.markers = region.selected().map(|s| s.markers.clone()).unwrap_or_default();
+                let set = region.selected().cloned();
+                cfg.adopt(set.as_ref());
             }
         });
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Shared {
-    pub version: u8,
-    pub marker: Marker,
-    pub kind: Option<usize>,
 }
 
 pub(super) fn paint_icon(painter: &egui::Painter, at: egui::Pos2, size: f32, name: &str, c: Color32) {
@@ -1059,26 +1281,25 @@ mod tests {
             ..Default::default()
         };
         let now = Instant::now();
-        let make = |kind| Shared {
-            version: 2,
-            marker: Marker {
-                id: Uuid::new_v4(),
-                name: "objective".into(),
-                position: [100.0, 200.0, 30.0],
-                radius: 0.0,
-                color: [255; 4],
-                selected: false,
-                shape: Shape::Point,
-                end: None,
-                ..Marker::default()
-            },
-            kind,
+        let make = || Marker {
+            id: Uuid::new_v4(),
+            name: "objective".into(),
+            position: [100.0, 200.0, 30.0],
+            radius: 0.0,
+            color: [255; 4],
+            selected: false,
+            shape: Shape::Point,
+            end: None,
+            ..Marker::default()
         };
-        assert!(cfg.accept_shared(Uuid::from_u128(1), make(Some(0)), now));
-        assert!(!cfg.accept_shared(Uuid::from_u128(1), make(Some(1)), now));
-        assert!(cfg.accept_shared(Uuid::from_u128(2), make(Some(1)), now));
-        assert!(cfg.accept_shared(Uuid::from_u128(1), make(None), now));
-        assert_eq!((cfg.pings.len(), cfg.markers.len()), (2, 1));
+        assert!(cfg.accept_place(Uuid::from_u128(1), make(), 0, now));
+        assert!(
+            !cfg.accept_place(Uuid::from_u128(1), make(), 1, now),
+            "one ping per peer every three seconds"
+        );
+        assert!(cfg.accept_place(Uuid::from_u128(2), make(), 1, now), "another peer is not held");
+        assert!(!cfg.accept_place(Uuid::from_u128(3), make(), 4, now), "a kind is one of four");
+        assert_eq!((cfg.pings.len(), cfg.markers.len()), (2, 0), "a peer cannot add markers to the set");
     }
     #[test]
     fn combat_tactical_old_circles_and_new_shapes_round_trip_without_session_state() {
@@ -1093,12 +1314,7 @@ mod tests {
         for shape in [Shape::Square, Shape::Line] {
             let m = Marker::drawn(shape, [100.0, 200.0, 30.0], [110.0, 204.0, 30.0], [255; 4]).expect("geometry");
             assert!(m.valid());
-            let bytes = serde_json::to_vec(&Shared {
-                version: 2,
-                marker: m.clone(),
-                kind: None,
-            })
-            .expect("wire");
+            let bytes = serde_json::to_vec(&m).expect("wire");
             assert!(bytes.len() <= 480);
             cfg.markers.push(m);
         }
@@ -1133,5 +1349,185 @@ mod tests {
             },
             |ui| assert_eq!(wheel_selection(ui.ctx(), origin), None),
         );
+    }
+
+    #[test]
+    fn an_old_marker_loads_with_the_default_style_and_a_default_style_is_not_written() {
+        let old = r#"{"id":"2b0f2a4e-0000-4000-8000-000000000001","name":"A","position":[1.0,2.0,3.0],"radius":5.0,"color":[1,2,3,255],"selected":false}"#;
+        let m: Marker = serde_json::from_str(old).expect("old marker");
+        assert_eq!(m.style, Style::default());
+        assert!(m.valid());
+        let written = serde_json::to_string(&m).expect("encode");
+        assert!(!written.contains("style"), "{written}");
+        let mut styled = m.clone();
+        styled.style.dash = Dash::Dashed;
+        styled.style.layer = 2;
+        let back: Marker = serde_json::from_str(&serde_json::to_string(&styled).expect("encode")).expect("decode");
+        assert_eq!(back, styled);
+    }
+
+    #[test]
+    fn the_new_shapes_are_valid_only_with_what_they_need_and_in_bounds() {
+        let at = [10.0, 10.0, 0.0];
+        let base = |shape: Shape| Marker {
+            id: Uuid::new_v4(),
+            name: "m".into(),
+            position: at,
+            shape,
+            ..Marker::default()
+        };
+        let mut polygon = base(Shape::Polygon);
+        assert!(!polygon.valid(), "a polygon needs corners");
+        polygon.path = vec![at, [20.0, 10.0, 0.0], [20.0, 20.0, 0.0]];
+        assert!(polygon.valid());
+        polygon.path = vec![at; 65];
+        assert!(!polygon.valid(), "at most 64 corners");
+        let mut route = base(Shape::Route);
+        route.path = vec![at, [30.0, 30.0, 0.0]];
+        assert!(route.valid());
+        route.path = vec![at, [2000.0, 30.0, 0.0]];
+        assert!(!route.valid(), "a route stays within 1024 m");
+        let mut arrow = base(Shape::Arrow);
+        assert!(!arrow.valid());
+        arrow.end = Some([40.0, 40.0, 0.0]);
+        assert!(arrow.valid());
+        let mut text = base(Shape::Text);
+        text.name.clear();
+        assert!(text.valid(), "a text may still be empty: it waits for its words");
+        let mut pin = base(Shape::Pin);
+        pin.style.badge = "ABCD".into();
+        assert!(!pin.valid(), "a badge has at most three characters");
+        pin.style.badge = "A1".into();
+        pin.style.icon = "flag-filled".into();
+        assert!(pin.valid());
+        pin.style.icon = "../../x".into();
+        assert!(!pin.valid(), "an icon is a plain name");
+        pin.style.icon.clear();
+        pin.style.width = 40.0;
+        assert!(!pin.valid(), "a width is bounded");
+    }
+
+    #[test]
+    fn the_markers_of_a_set_keep_their_layers_with_the_set() {
+        let mut cfg = Settings::default();
+        let key = super::super::sets::RegionKey {
+            grid: "g".into(),
+            region: 7,
+        };
+        cfg.enter_region(key.clone(), "R");
+        cfg.layers.push(Layer {
+            name: "Mine".into(),
+            visible: false,
+            locked: true,
+        });
+        cfg.add_marker([5.0, 5.0, 5.0]);
+        cfg.markers[0].style.layer = 3;
+        cfg.save_set();
+        let other = super::super::sets::RegionKey {
+            grid: "g".into(),
+            region: 8,
+        };
+        cfg.enter_region(other, "S");
+        assert_eq!(cfg.layers, Layer::defaults(), "another region starts on the default layers");
+        cfg.enter_region(key, "R");
+        assert_eq!(cfg.layers.len(), 4);
+        assert!(!cfg.layers[3].visible && cfg.layers[3].locked);
+        assert_eq!(cfg.markers[0].style.layer, 3);
+        assert!(!cfg.layer_visible(&cfg.markers[0]) && cfg.layer_locked(&cfg.markers[0]));
+    }
+
+    #[test]
+    fn the_history_follows_the_set_and_is_not_part_of_the_settings() {
+        let mut cfg = Settings::default();
+        let key = super::super::sets::RegionKey {
+            grid: "g".into(),
+            region: 1,
+        };
+        cfg.enter_region(key, "R");
+        cfg.sync_history();
+        cfg.push_undo(cfg.snapshot());
+        assert_eq!(cfg.history.undo.len(), 1);
+        assert_eq!(cfg.clone(), cfg, "a copy compares equal without the history");
+        assert!(cfg.clone().history.undo.is_empty());
+        cfg.library
+            .region_mut(&cfg.current_region.clone().expect("region"), "")
+            .add("other".into(), &[]);
+        cfg.sync_history();
+        assert!(cfg.history.undo.is_empty(), "another active set starts a new history");
+    }
+
+    #[test]
+    fn markers_come_without_a_name_and_the_marker_flags_hide_and_fix_them() {
+        let mut cfg = Settings::default();
+        cfg.add_marker([1.0, 2.0, 3.0]);
+        assert!(cfg.markers[0].name.is_empty(), "no default name");
+        let drawn = Marker::drawn(Shape::Line, [0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [1, 2, 3, 255]).expect("line");
+        assert!(drawn.name.is_empty());
+        let mut hidden = cfg.markers[0].clone();
+        hidden.id = Uuid::new_v4();
+        hidden.style.hidden = true;
+        let mut fixed = cfg.markers[0].clone();
+        fixed.id = Uuid::new_v4();
+        fixed.style.locked = true;
+        cfg.markers.extend([hidden.clone(), fixed.clone()]);
+        assert!(cfg.shown(&cfg.markers[0]) && !cfg.shown(&hidden) && cfg.shown(&fixed));
+        assert!(!cfg.frozen(&cfg.markers[0]) && cfg.frozen(&fixed));
+        assert_eq!(cfg.draw_order().len(), 2, "a hidden marker is not drawn");
+        let mut offset = fixed.clone();
+        offset.style.label_dx = 900.0;
+        assert!(!offset.valid(), "a name stays within 512 m of its marker");
+    }
+
+    #[test]
+    fn the_draw_order_runs_layer_by_layer_and_keeps_the_sets_order_inside_one() {
+        let mut cfg = Settings::default();
+        let make = |name: &str, layer: u8| Marker {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            style: Style { layer, ..Style::default() },
+            ..Marker::default()
+        };
+        cfg.markers = vec![
+            make("top-a", 2),
+            make("bottom-a", 0),
+            make("top-b", 2),
+            make("bottom-b", 0),
+            make("mid", 1),
+        ];
+        let order: Vec<&str> = cfg.draw_order().iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(order, vec!["bottom-a", "bottom-b", "mid", "top-a", "top-b"]);
+    }
+
+    #[test]
+    fn quick_placement_adds_a_nameless_pin_with_the_next_letter_as_one_undo_step() {
+        let mut cfg = Settings::default();
+        cfg.place_marker(Shape::Pin, [10.0, 20.0, 30.0]);
+        cfg.place_marker(Shape::Pin, [11.0, 21.0, 30.0]);
+        cfg.place_marker(Shape::Point, [12.0, 22.0, 30.0]);
+        let badges: Vec<&str> = cfg.markers.iter().map(|m| m.style.badge.as_str()).collect();
+        assert_eq!(badges, vec!["A", "B", ""]);
+        assert!(cfg.markers.iter().all(|m| m.name.is_empty()));
+        assert_eq!(cfg.markers.iter().filter(|m| m.selected).count(), 1, "the new one is the selection");
+        assert_eq!(cfg.history.undo.len(), 3);
+        assert!(cfg.undo());
+        assert_eq!(cfg.markers.len(), 2);
+        assert!(cfg.redo());
+        assert_eq!(cfg.markers.len(), 3);
+    }
+
+    #[test]
+    fn a_dragged_gesture_put_back_restores_the_markers_as_they_were() {
+        let mut cfg = Settings::default();
+        cfg.place_marker(Shape::Pin, [10.0, 20.0, 30.0]);
+        let before = cfg.snapshot();
+        cfg.edit_drag = Some(EditGesture::Move {
+            start: [0.0, 0.0],
+            originals: cfg.markers.clone(),
+            before: before.clone(),
+        });
+        cfg.markers[0].position = [99.0, 99.0, 30.0];
+        cfg.cancel_gesture();
+        assert_eq!(cfg.markers, before.markers);
+        assert!(cfg.edit_drag.is_none());
     }
 }

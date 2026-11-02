@@ -102,9 +102,8 @@ pub(crate) fn active(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, identit
                     ui.horizontal_wrapped(|ui| {
                         ui.label(format!("{name} · {}", kind_name(ping.kind)))
                             .on_hover_text(ping.sender.to_string());
-                        let can_respond = cfg.available()
-                            && cfg.pings_enabled
-                            && (ping.own() || cfg.share && cfg.send_enabled && ping.compatible && !ping.acknowledged);
+                        let can_respond =
+                            cfg.available() && cfg.pings_enabled && (ping.own() || cfg.share && cfg.send_enabled && !ping.acknowledged);
                         let label = if ping.own() {
                             tr!("ping-cancel")
                         } else if ping.acknowledged {
@@ -131,8 +130,6 @@ pub(crate) fn active(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, identit
                         for id in &ping.responders {
                             ui.label(format!("✓ {}", identities.get(id).cloned().unwrap_or_else(|| id.to_string())));
                         }
-                    } else if !ping.compatible {
-                        ui.label(egui::RichText::new(tr!("ping-legacy-peer")).small().color(p.muted));
                     }
                 });
             });
@@ -256,7 +253,7 @@ pub(crate) fn target_hint(ctx: &egui::Context, p: &Palette, cfg: &Settings, id: 
         tr!("ping-cancel")
     } else if ping.acknowledged {
         tr!("ping-on-my-way")
-    } else if ping.compatible && cfg.share && cfg.send_enabled {
+    } else if cfg.share && cfg.send_enabled {
         tr!("ping-on-my-way-action")
     } else {
         return;
