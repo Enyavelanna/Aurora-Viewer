@@ -17,7 +17,6 @@ use crate::{
 };
 use aurora_i18n::tr;
 use egui::{RichText, vec2};
-use std::collections::BTreeMap;
 use uuid::Uuid;
 
 /// The tab's own state: the search of the residents list.
@@ -261,21 +260,6 @@ fn resident_row(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, e: &Entry) {
     });
 }
 
-/// The titles worn around us, with how many residents wear each.
-fn titles_around(context: &Context) -> Vec<(String, usize)> {
-    let mut count: BTreeMap<String, (String, usize)> = BTreeMap::new();
-    for title in context.nearby.iter().filter_map(|n| n.title.as_deref()) {
-        let clean = allies::clean_tag(title);
-        if clean.is_empty() {
-            continue;
-        }
-        count.entry(clean.to_lowercase()).or_insert_with(|| (clean, 0)).1 += 1;
-    }
-    let mut out: Vec<(String, usize)> = count.into_values().collect();
-    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
-    out
-}
-
 fn wearing(context: &Context, tag: &str) -> usize {
     context
         .nearby
@@ -311,6 +295,8 @@ fn groups(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context)
         ui.add_enabled_ui(context.active_group.is_some(), |ui| {
             widgets::switch_labeled(ui, p, &mut cfg.allies.active_group, tr!("allies-worn-group"));
         });
+        // One group switch for pings and marker sets: the sets follow the allied group.
+        cfg.share_group = cfg.allies.active_group;
         muted(ui, p, tr!("allies-worn-group-help"));
         ui.add_space(10.0);
         ui.label(RichText::new(tr!("allies-tags")).strong().color(p.ink));
@@ -339,10 +325,19 @@ fn groups(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context)
         }
         ui.add_space(8.0);
         ui.label(RichText::new(tr!("allies-tags-near")).size(12.0).color(p.muted));
-        let mut around = titles_around(context);
+        let mut around = crate::combat::tactical::titles_around(context);
+        let any_title = !around.is_empty();
         around.retain(|(title, _)| !cfg.allies.has_tag(title));
         if around.is_empty() {
-            muted(ui, p, tr!("allies-no-titles"));
+            muted(
+                ui,
+                p,
+                if any_title {
+                    tr!("allies-titles-all-allied")
+                } else {
+                    tr!("allies-no-titles")
+                },
+            );
         }
         for (title, count) in around {
             ui.horizontal(|ui| {

@@ -3,7 +3,7 @@
 //! The rules themselves live in `app/bridge.rs`; this page only shows them.
 use super::combat_cards::{badge, muted, notice, pill};
 use crate::{
-    combat::tactical::{Context, Settings, distance_text},
+    combat::tactical::{Context, Settings},
     theme::Palette,
     ui::widgets,
 };
@@ -12,25 +12,16 @@ use egui::{RichText, Vec2, vec2};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
-/// The page's own state: the search and the list's filter.
-#[derive(Default)]
-pub(crate) struct View {
-    search: String,
-    filter: usize,
-}
-
-/// One resident of the teammates list.
-struct Entry {
-    id: Uuid,
-    name: String,
-    detail: String,
-    distance: Option<f32>,
-    teammate: bool,
-    in_group: bool,
-}
-
 /// True when a setting changed.
-pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context, available: bool, view: &mut View) -> bool {
+/// `goto` asks the window to open another tab (the Allies one).
+pub(crate) fn show(
+    ui: &mut egui::Ui,
+    p: &Palette,
+    cfg: &mut Settings,
+    context: &Context,
+    available: bool,
+    goto: &mut Option<usize>,
+) -> bool {
     let before = cfg.clone();
     if !available {
         notice(ui, p, tr!("sharing-unavailable"));
@@ -44,19 +35,15 @@ pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: 
             ui.add_space(10.0);
             if ui.available_width() >= 760.0 {
                 ui.columns(2, |columns| {
-                    teammates(&mut columns[0], p, cfg, context, view);
-                    columns[1].vertical(|ui| {
-                        group_card(ui, p, cfg, context);
-                        ui.add_space(10.0);
-                        send_card(ui, p, cfg, context);
+                    columns[0].vertical(|ui| {
+                        who_card(ui, p, context, goto);
                         ui.add_space(10.0);
                         inbox_card(ui, p, cfg, context);
                     });
+                    send_card(&mut columns[1], p, cfg, context);
                 });
             } else {
-                teammates(ui, p, cfg, context, view);
-                ui.add_space(10.0);
-                group_card(ui, p, cfg, context);
+                who_card(ui, p, context, goto);
                 ui.add_space(10.0);
                 send_card(ui, p, cfg, context);
                 ui.add_space(10.0);
@@ -74,11 +61,6 @@ fn group_members(context: &Context) -> Option<&BTreeSet<Uuid>> {
 
 fn teammate_ids(cfg: &Settings) -> BTreeSet<Uuid> {
     cfg.recipients.iter().filter(|(_, on)| **on).map(|(id, _)| *id).collect()
-}
-
-/// The group counts for accepting (bridge.rs: when it is used for sets or pings).
-fn group_used(cfg: &Settings) -> bool {
-    cfg.share_group || cfg.ping_audience == 2
 }
 
 /// How many residents your pings reach; None while the group loads.
@@ -153,11 +135,7 @@ fn summary(cfg: &Settings, context: &Context) -> String {
     let receiving = if !cfg.receive_enabled {
         tr!("sharing-summary-not-receiving").to_owned()
     } else {
-        let teammates = teammate_ids(cfg).len().to_string();
-        match context.active_group.as_ref().filter(|_| group_used(cfg)) {
-            Some(group) => tr!("sharing-summary-accept-group", count = teammates, group = group.name.clone()),
-            None => tr!("sharing-summary-accept", count = teammates),
-        }
+        tr!("sharing-summary-accept", count = context.allies.len().to_string())
     };
     format!("{sending} · {receiving}")
 }
@@ -168,20 +146,14 @@ fn audience(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Contex
         title(ui, p, "share", tr!("tactical-ping-sharing"), None);
         ui.add_space(4.0);
         ui.add_enabled_ui(cfg.send_enabled, |ui| {
-            let mut selected = usize::from(cfg.ping_audience.min(crate::combat::allies::AUDIENCE));
-            let choices = [
-                (tr!("tactical-local"), false),
-                (tr!("sharing-teammates"), false),
-                (tr!("tactical-active-group"), false),
-                (tr!("tactical-allies"), false),
-            ];
+            let mut selected = usize::from(cfg.ping_audience == crate::combat::allies::AUDIENCE);
+            let choices = [(tr!("tactical-local"), false), (tr!("tactical-allies"), false)];
             if widgets::segmented(ui, p, &mut selected, &choices) {
-                cfg.ping_audience = selected as u8;
+                cfg.ping_audience = if selected == 1 { crate::combat::allies::AUDIENCE } else { 0 };
             }
         });
         let reach = match (cfg.ping_audience, ping_reach(cfg, context)) {
             (0, _) => tr!("sharing-pings-only-me").to_owned(),
-            (2, _) if context.active_group.is_none() => tr!("sharing-no-group").to_owned(),
             (_, None) => tr!("sharing-group-loading").to_owned(),
             (_, Some(0)) => tr!("sharing-pings-nobody").to_owned(),
             (_, Some(n)) => tr!("sharing-summary-pings", count = n.to_string()),
@@ -212,152 +184,25 @@ pub(super) fn tile(ui: &mut egui::Ui, p: &Palette, id: Uuid, name: &str) {
     );
 }
 
-fn entries(cfg: &Settings, context: &Context) -> Vec<Entry> {
-    let members = group_members(context);
-    let in_group = |id: &Uuid| members.is_some_and(|m| m.contains(id));
-    let teammates = teammate_ids(cfg);
-    let mut out: Vec<Entry> = context
-        .nearby
-        .iter()
-        .map(|n| Entry {
-            id: n.id,
-            name: n.name.clone(),
-            detail: distance_text(n),
-            distance: n.distance,
-            teammate: teammates.contains(&n.id),
-            in_group: in_group(&n.id),
-        })
-        .collect();
-    for id in teammates.iter().filter(|id| !context.nearby.iter().any(|n| n.id == **id)) {
-        out.push(Entry {
-            id: *id,
-            name: context.name_of(id),
-            detail: tr!("sharing-away").to_owned(),
-            distance: None,
-            teammate: true,
-            in_group: in_group(id),
-        });
-    }
-    // teammates first, then the nearest, then by name
-    out.sort_by(|a, b| {
-        b.teammate
-            .cmp(&a.teammate)
-            .then(a.distance.unwrap_or(f32::MAX).total_cmp(&b.distance.unwrap_or(f32::MAX)))
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-    out
-}
-
-fn teammates(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context, view: &mut View) {
+/// Who receives: the allies, kept in the Allies tab, with the way there.
+fn who_card(ui: &mut egui::Ui, p: &Palette, context: &Context, goto: &mut Option<usize>) {
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            title(ui, p, "users", tr!("sharing-teammates"), Some(teammate_ids(cfg).len()));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::icon_button(ui, p, "user-minus", tr!("sharing-clear"), !cfg.recipients.is_empty()) {
-                    cfg.recipients.clear();
-                }
-                if widgets::icon_button(ui, p, "user-plus", tr!("sharing-add-nearby"), !context.nearby.is_empty()) {
-                    for n in &context.nearby {
-                        cfg.recipients.insert(n.id, true);
-                    }
-                }
-            });
-        });
-        muted(ui, p, tr!("sharing-teammates-help"));
+        title(ui, p, "heart-handshake", tr!("sharing-who"), Some(context.allies.len()));
+        muted(ui, p, tr!("sharing-who-help"));
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            widgets::search_field(ui, &mut view.search, tr!("sharing-search"), 180.0);
-            let filters = [
-                (tr!("sharing-filter-all"), false),
-                (tr!("sharing-teammates"), false),
-                (tr!("sharing-filter-group"), false),
-            ];
-            widgets::segmented(ui, p, &mut view.filter, &filters);
-        });
-        ui.add_space(6.0);
-        let query = view.search.to_lowercase();
-        let list: Vec<Entry> = entries(cfg, context)
-            .into_iter()
-            .filter(|e| match view.filter {
-                1 => e.teammate,
-                2 => e.in_group,
-                _ => true,
-            })
-            .filter(|e| query.is_empty() || e.name.to_lowercase().contains(&query))
-            .collect();
-        if list.is_empty() {
-            let text = if context.nearby.is_empty() && view.filter == 0 && query.is_empty() {
-                tr!("sharing-nobody-nearby")
-            } else {
-                tr!("sharing-no-match")
-            };
-            ui.add_space(12.0);
-            ui.vertical_centered(|ui| muted(ui, p, text));
-            ui.add_space(12.0);
-            return;
+        if widgets::action_button(
+            ui,
+            p,
+            "heart-handshake",
+            tr!("sharing-manage-allies"),
+            widgets::ActionKind::Flat,
+            vec2(0.0, 28.0),
+        )
+        .clicked()
+        {
+            *goto = Some(super::combat_window::ALLIES_TAB);
         }
-        egui::ScrollArea::vertical()
-            .id_salt("sharing-teammates")
-            .max_height(360.0)
-            .show(ui, |ui| {
-                for e in list {
-                    ui.horizontal(|ui| {
-                        tile(ui, p, e.id, &e.name);
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(&e.name).color(if e.detail == tr!("sharing-away") { p.muted } else { p.ink }));
-                                if e.in_group {
-                                    badge(ui, p, tr!("sharing-group-badge"), p.teal);
-                                }
-                            });
-                            if !e.detail.is_empty() {
-                                ui.label(RichText::new(&e.detail).size(11.0).color(p.muted));
-                            }
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let mut on = e.teammate;
-                            if widgets::checkbox(ui, p, &mut on, "")
-                                .on_hover_text(tr!("sharing-teammate-toggle"))
-                                .changed()
-                            {
-                                if on {
-                                    cfg.recipients.insert(e.id, true);
-                                } else {
-                                    cfg.recipients.remove(&e.id);
-                                }
-                            }
-                        });
-                    });
-                    ui.add_space(4.0);
-                }
-            });
-    });
-}
-
-fn group_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) {
-    widgets::surface(ui, p, |ui| {
-        ui.set_width(ui.available_width());
-        title(ui, p, "users-group", tr!("sharing-active-group"), None);
-        match &context.active_group {
-            None => muted(ui, p, tr!("sharing-no-group")),
-            Some(group) => {
-                ui.label(RichText::new(&group.name).strong().color(p.ink));
-                let line = match &group.members {
-                    None => tr!("sharing-group-loading").to_owned(),
-                    Some(members) => tr!(
-                        "sharing-group-members",
-                        count = members.len().to_string(),
-                        nearby = context.nearby.iter().filter(|n| members.contains(&n.id)).count().to_string()
-                    ),
-                };
-                muted(ui, p, &line);
-            }
-        }
-        ui.add_space(4.0);
-        ui.add_enabled_ui(context.active_group.is_some(), |ui| {
-            widgets::switch_labeled(ui, p, &mut cfg.share_group, tr!("tactical-share-group"));
-        });
     });
 }
 

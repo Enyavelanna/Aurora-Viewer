@@ -121,6 +121,13 @@ pub(crate) fn pill(ui: &mut egui::Ui, p: &Palette, on: &mut bool, text: &str, ti
     }
 }
 
+/// A small heading that splits a long card into groups.
+pub(crate) fn section(ui: &mut egui::Ui, p: &Palette, text: &str) {
+    ui.add_space(6.0);
+    ui.label(RichText::new(text).size(11.5).strong().color(p.muted));
+    ui.add_space(2.0);
+}
+
 /// A switch and its label; `help` shows under the label when given.
 pub(crate) fn switch_row(ui: &mut egui::Ui, p: &Palette, on: &mut bool, label: &str, help: &str) -> bool {
     let before = *on;

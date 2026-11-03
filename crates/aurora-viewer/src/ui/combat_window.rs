@@ -4,6 +4,8 @@ use crate::{settings::Settings, theme::Palette};
 use aurora_i18n::tr;
 
 pub const WINDOW: &str = "combat_workspace";
+/// The Allies tab, which the Sharing tab sends you to.
+pub(crate) const ALLIES_TAB: usize = 7;
 
 #[derive(Default)]
 pub(crate) struct CombatWindow {
@@ -109,6 +111,9 @@ impl CombatWindow {
                             result.changed |= r.changed;
                             result.combat_preview = r.combat_preview;
                         });
+                        if let Some(tab) = self.controls.combat_goto.take() {
+                            self.tab = tab;
+                        }
                     });
                 });
             });

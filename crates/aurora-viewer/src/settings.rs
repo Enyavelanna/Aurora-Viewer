@@ -2654,6 +2654,7 @@ impl Settings {
             10.0
         };
         self.combat.migrate_rewards();
+        self.maps.tactical.migrate_audience();
         self.maps.tactical.allies.sanitize();
         self
     }

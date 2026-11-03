@@ -83,7 +83,7 @@ Mark contacts, objectives, and regroup points without leaving mouselook. The pin
 
 ### Allies
 - **Allies tab** in the Combat window: tick the residents around you, ally the group you wear, or ally a group title you see over someone's head.
-- **Pings go to your allies** straight away, and you accept theirs.
+- **Pings go to your allies** straight away, and you accept theirs. The Sharing tab keeps one choice of who receives (only you, or your allies) and sends you to the Allies tab to manage them.
 - **Own colour on the minimap** (configurable), with an optional ring.
 
 ### Tactical Mapping

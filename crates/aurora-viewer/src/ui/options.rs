@@ -347,7 +347,8 @@ const UNDO_SECONDS: f64 = 8.0;
 pub struct OptionsUi {
     saved_graphics: saved_graphics::Editor,
     pub(crate) tactical_context: crate::combat::tactical::Context,
-    pub(crate) combat_sharing: crate::ui::combat_sharing::View,
+    /// A tab of the Combat window another page asked to open.
+    pub(crate) combat_goto: Option<usize>,
     pub(crate) combat_allies: crate::ui::combat_allies::View,
     pub(crate) combat_reward_selected: usize,
     pub(crate) combat_medal_images: HashMap<uuid::Uuid, egui::TextureHandle>,

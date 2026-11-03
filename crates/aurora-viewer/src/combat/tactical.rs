@@ -1036,6 +1036,17 @@ impl Settings {
         let key = super::allies::clean_tag(title).to_lowercase();
         self.title_colors.retain(|(t, _)| t.to_lowercase() != key);
     }
+    /// The Sharing tab keeps one choice of who receives, "allies": the older teammates
+    /// and active group audiences become allies, and the group switch follows the allied group.
+    pub fn migrate_audience(&mut self) {
+        if self.share_group || self.ping_audience == 2 {
+            self.allies.active_group = true;
+        }
+        if self.ping_audience == 1 || self.ping_audience == 2 {
+            self.ping_audience = super::allies::AUDIENCE;
+        }
+        self.share_group = self.allies.active_group;
+    }
     pub fn prune(&mut self) {
         self.share_error |= self.inbox.expire(Instant::now());
         self.pings.retain(|p| p.at.elapsed().as_secs_f32() < self.seconds.clamp(1.0, 60.0));
@@ -1519,6 +1530,27 @@ pub(super) fn paint_icon(painter: &egui::Painter, at: egui::Pos2, size: f32, nam
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_older_audiences_become_allies_and_the_group_switch_follows_the_allied_group() {
+        let mut cfg = Settings {
+            ping_audience: 2,
+            ..Settings::default()
+        };
+        cfg.migrate_audience();
+        assert_eq!(cfg.ping_audience, super::super::allies::AUDIENCE);
+        assert!(cfg.allies.active_group && cfg.share_group);
+        let mut cfg = Settings {
+            ping_audience: 1,
+            ..Settings::default()
+        };
+        cfg.migrate_audience();
+        assert_eq!(cfg.ping_audience, super::super::allies::AUDIENCE);
+        assert!(!cfg.allies.active_group && !cfg.share_group);
+        cfg.allies.active_group = true;
+        cfg.migrate_audience();
+        assert!(cfg.share_group);
+    }
 
     #[test]
     fn group_colours_follow_the_titles_worn_around_whatever_their_case() {

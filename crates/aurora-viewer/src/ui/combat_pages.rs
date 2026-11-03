@@ -1,7 +1,7 @@
 //! The seven tabs of the Combat window, each a dashboard of cards
 //! (`combat_cards`). They edit the settings directly: Combat's settings
 //! live in this window and nowhere else.
-use super::combat_cards::{Card, color_row, columns, field_row, gap, muted, notice, slider_row, switch_row, text_row, under};
+use super::combat_cards::{Card, color_row, columns, field_row, gap, muted, notice, section, slider_row, switch_row, text_row, under};
 use super::options::{OptionsResult, OptionsUi};
 use crate::{combat::tactical::Settings as Tactical, settings::Settings, theme::Palette};
 use aurora_i18n::tr;
@@ -24,7 +24,7 @@ pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut Op
             5 => pings(ui, p, s, st, &d),
             6 => {
                 let available = s.combat.enabled && s.maps.tactical.tools_enabled;
-                super::combat_sharing::show(ui, p, &mut s.maps.tactical, &st.tactical_context, available, &mut st.combat_sharing)
+                super::combat_sharing::show(ui, p, &mut s.maps.tactical, &st.tactical_context, available, &mut st.combat_goto)
             }
             _ => {
                 let available = s.combat.enabled && s.maps.tactical.tools_enabled;
@@ -183,12 +183,18 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                     **changed |= switch_row(ui, p, &mut c.feed_test, tr!("combat-feed-test"), tr!("combat-feed-test-help"));
                     let on = c.feed;
                     **changed |= under(ui, on, |ui| {
+                        section(ui, p, tr!("combat-feed-section-look"));
                         let mut style = usize::from(c.feed_style.min(crate::combat::feed::STYLE_CARDS));
                         let styles = [(tr!("combat-feed-style-compact"), false), (tr!("combat-feed-style-cards"), false)];
                         let mut any = field_row(ui, tr!("combat-feed-style"), "", |ui| {
                             super::widgets::segmented(ui, p, &mut style, &styles)
                         });
                         c.feed_style = style as u8;
+                        any |= slider_row(ui, tr!("combat-size"), "", &mut c.feed_size, 9.0..=32.0, "");
+                        any |= slider_row(ui, tr!("combat-opacity"), "", &mut c.feed_opacity, 0.1..=1.0, "");
+                        any |= slider_row(ui, tr!("combat-duration"), "", &mut c.feed_seconds, 1.0..=30.0, "");
+                        any |= slider_row(ui, tr!("combat-entries"), "", &mut c.feed_entries, 1..=20, "");
+                        section(ui, p, tr!("combat-feed-section-filters"));
                         let mut filter = usize::from(c.feed_filter.min(crate::combat::feed::FILTER_ALLIES));
                         let filters = [
                             (tr!("combat-feed-filter-all"), false),
@@ -201,13 +207,11 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                         c.feed_filter = filter as u8;
                         any |= switch_row(ui, p, &mut c.feed_always_mine, tr!("combat-feed-always-mine"), "");
                         any |= switch_row(ui, p, &mut c.feed_avatars_only, tr!("combat-feed-avatars-only"), "");
+                        section(ui, p, tr!("combat-feed-section-contents"));
                         any |= switch_row(ui, p, &mut c.feed_damage, tr!("combat-feed-damage"), tr!("combat-feed-damage-help"));
                         any |= switch_row(ui, p, &mut c.feed_medals, tr!("combat-feed-medals"), tr!("combat-feed-medals-help"));
+                        section(ui, p, tr!("combat-feed-section-position"));
                         any |= switch_row(ui, p, &mut c.feed_snap, tr!("combat-feed-snap"), "");
-                        any |= slider_row(ui, tr!("combat-size"), "", &mut c.feed_size, 9.0..=32.0, "");
-                        any |= slider_row(ui, tr!("combat-opacity"), "", &mut c.feed_opacity, 0.1..=1.0, "");
-                        any |= slider_row(ui, tr!("combat-duration"), "", &mut c.feed_seconds, 1.0..=30.0, "");
-                        any |= slider_row(ui, tr!("combat-entries"), "", &mut c.feed_entries, 1..=20, "");
                         any |= slider_row(ui, tr!("combat-horizontal"), "", &mut c.feed_position[0], 0.0..=1.0, "");
                         any | slider_row(ui, tr!("combat-vertical"), "", &mut c.feed_position[1], 0.0..=1.0, "")
                     });
