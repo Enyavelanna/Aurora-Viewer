@@ -15,6 +15,7 @@ mod gestures;
 mod inventory_copies;
 mod inventory_moves;
 mod inventory_preview;
+mod inventory_udp;
 mod inventory_updates;
 mod inventory_upload;
 mod object_actions;
@@ -79,6 +80,17 @@ const SIM_TIMEOUT: Duration = Duration::from_secs(100);
 /// DEFAULT_FIELD_OF_VIEW (60°): the camera's angle until the viewer gives its own.
 const DEFAULT_FOV: f32 = std::f32::consts::FRAC_PI_3;
 const PING_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The largest region side a grid can announce (Constants.MaximumRegionSize,
+/// OpenSim). The viewer sizes the region's land and parcel grids from it: a
+/// broken or hostile simulator must not make it allocate gigabytes.
+pub(crate) const MAX_REGION_SIDE: u32 = 4096;
+
+/// A region side announced by the grid, held to 256..=[`MAX_REGION_SIDE`].
+pub(crate) fn region_side(n: u32) -> u32 {
+    n.clamp(256, MAX_REGION_SIDE)
+}
+
 /// Diagnostic: the RegionHandshake of a region the agent arrived in should
 /// come along with AgentMovementComplete; without it the simulator never
 /// sends terrain or objects (it waits for RegionHandshakeReply).
@@ -228,6 +240,9 @@ struct Session<'a> {
     caps_tx: CapsSender,
     notecard_copy_tx: mpsc::UnboundedSender<(u32, Result<(), String>)>,
     inventory_move_tx: mpsc::UnboundedSender<inventory_moves::Request>,
+    inventory_udp_tx: mpsc::UnboundedSender<inventory_udp::Request>,
+    /// AgentSetAppearance messages sent this session (their SerialNum).
+    appearance_serial: u32,
     notecard_copies: HashMap<u32, (Uuid, Uuid, bool)>,
     /// When an AgentUpdate leaves (agent_update.rs).
     agent_update: AgentUpdateRule,
@@ -292,6 +307,16 @@ fn packets_counted(stats: &NetStats) -> throttle::Counted {
 
 fn emit(sh: &Shared, ev: NetEvent) {
     let _ = sh.events.send(ev);
+}
+
+/// A folder made without AIS, known to the viewer before anything goes in
+/// it (createNewCategoryCoro's updateCategory): the server's own updates
+/// for the items then find their folder instead of Lost And Found.
+fn announce_folder(events: &crate::EventSender, folder: crate::inventory::InvFolder) {
+    let _ = events.send(NetEvent::InventoryUpdated {
+        folders: vec![folder],
+        items: Vec::new(),
+    });
 }
 
 /// Items read, items the server says do not exist, and failed reads.
@@ -403,6 +428,7 @@ pub(crate) async fn run_session(sh: &Shared, req: LoginRequest, cmd_rx: &mut mps
     let (caps_tx, mut caps_rx) = mpsc::unbounded_channel();
     let (notecard_copy_tx, mut notecard_copy_rx) = mpsc::unbounded_channel();
     let (inventory_move_tx, mut inventory_move_rx) = mpsc::unbounded_channel();
+    let (inventory_udp_tx, mut inventory_udp_rx) = mpsc::unbounded_channel();
     let (object_cache, mut object_cache_rx) = object_cache::ObjectCaches::new(sh.object_cache_dir.lock().clone());
     let mut s = Session {
         sh,
@@ -444,6 +470,8 @@ pub(crate) async fn run_session(sh: &Shared, req: LoginRequest, cmd_rx: &mut mps
         attach_queue: Default::default(),
         notecard_copy_tx,
         inventory_move_tx,
+        inventory_udp_tx,
+        appearance_serial: 0,
         notecard_copies: HashMap::new(),
         inventory_merchant_pending: false,
         next_inventory_callback: 0,
@@ -508,6 +536,10 @@ pub(crate) async fn run_session(sh: &Shared, req: LoginRequest, cmd_rx: &mut mps
             Some(request) = inventory_move_rx.recv() => {
                 woke = Instant::now();
                 s.inventory_move(request);
+            }
+            Some(request) = inventory_udp_rx.recv() => {
+                woke = Instant::now();
+                s.inventory_udp(request);
             }
             Some(file) = object_cache_rx.recv() => {
                 woke = Instant::now();
@@ -979,7 +1011,7 @@ impl Session<'_> {
                     }
                 }
                 Ok(resp) => log::info!("ExtEnvironment: HTTP {}", resp.status()),
-                Err(e) => log::info!("ExtEnvironment failed: {e}"),
+                Err(e) => log::info!("ExtEnvironment failed: {}", e.without_url()),
             }
         });
     }
@@ -1888,7 +1920,7 @@ impl Session<'_> {
                                     }
                                 }
                                 Ok(resp) => log::debug!("AgentProfile {id}: HTTP {}", resp.status()),
-                                Err(e) => log::debug!("AgentProfile {id}: {e}"),
+                                Err(e) => log::debug!("AgentProfile {id}: {}", e.without_url()),
                             }
                         });
                     }
@@ -2249,6 +2281,35 @@ impl Session<'_> {
                     emit(self.sh, NetEvent::InventoryEdited { request, result });
                     return;
                 }
+                // Without AIS, once the seed has answered: the capabilities
+                // arrive together, so the fetch service without AIS is no
+                // grid still logging in (AISAPI::isAvailable).
+                if let Some(fetch_cap) = self.fetch_without_ais() {
+                    let http = self.sh.caps_http.clone();
+                    let events = self.sh.events.clone();
+                    let owner = self.agent_id();
+                    let moves = self.inventory_move_tx.clone();
+                    let edits = self.inventory_udp_tx.clone();
+                    let create_cap = self.main_cap("CreateInventoryCategory");
+                    tokio::spawn(async move {
+                        let result = crate::inventory::operations::mutate_udp(
+                            &http,
+                            create_cap.as_deref(),
+                            &fetch_cap,
+                            owner,
+                            change,
+                            |movement| inventory_moves::submit(moves.clone(), movement),
+                            |edit| inventory_udp::submit(edits.clone(), edit),
+                            |progress| {
+                                let _ = events.send(NetEvent::InventoryProgress { request, progress });
+                            },
+                            &|folder| announce_folder(&events, folder),
+                        )
+                        .await;
+                        let _ = events.send(NetEvent::InventoryEdited { request, result });
+                    });
+                    return;
+                }
                 let folder_creation = (change.defer_folder_contents || !change.copies.is_empty())
                     && change
                         .operations
@@ -2401,7 +2462,7 @@ impl Session<'_> {
                                 let reason = r.status().canonical_reason().unwrap_or("").to_owned();
                                 crate::slm::merchant_status(r.status().as_u16(), &reason)
                             }
-                            Err(e) => crate::slm::MerchantStatus::ConnectionFailure(e.to_string()),
+                            Err(e) => crate::slm::MerchantStatus::ConnectionFailure(e.without_url().to_string()),
                         },
                     };
                     let _ = events.send(NetEvent::MerchantStatus(status));
@@ -2681,6 +2742,16 @@ impl Session<'_> {
                 }
             }
             NetCommand::SetInventoryFavorite { item, favorite } => {
+                if self.fetch_without_ais().is_some() {
+                    emit(
+                        self.sh,
+                        NetEvent::InventoryFavoriteUpdated {
+                            item,
+                            result: Err(aurora_i18n::tr!("session-inventory-change-not-supported-on-this-grid").into()),
+                        },
+                    );
+                    return;
+                }
                 let caps = self.main_cap("InventoryAPIv3").zip(self.main_cap("FetchInventory2"));
                 let Some((cap, fetch_cap)) = caps else {
                     emit(
@@ -2701,6 +2772,26 @@ impl Session<'_> {
                 });
             }
             NetCommand::UpdateOutfitCategory { request, change } => {
+                if let Some(fetch_cap) = self.fetch_without_ais() {
+                    let http = self.sh.caps_http.clone();
+                    let events = self.sh.events.clone();
+                    let owner = self.agent_id();
+                    let moves = self.inventory_move_tx.clone();
+                    let edits = self.inventory_udp_tx.clone();
+                    tokio::spawn(async move {
+                        let result = crate::outfits::categories::mutate_udp(
+                            &http,
+                            &fetch_cap,
+                            owner,
+                            change,
+                            |movement| inventory_moves::submit(moves, movement),
+                            |edit| inventory_udp::submit(edits, edit),
+                        )
+                        .await;
+                        let _ = events.send(NetEvent::OutfitUpdated { request, result });
+                    });
+                    return;
+                }
                 let caps = self.main_cap("InventoryAPIv3").zip(self.main_cap("FetchInventoryDescendents2"));
                 let Some((cap, fetch_cap)) = caps else {
                     emit(
@@ -2725,6 +2816,27 @@ impl Session<'_> {
                 });
             }
             NetCommand::UpdateOutfit { request, change } => {
+                if let Some(fetch_cap) = self.fetch_without_ais() {
+                    let http = self.sh.caps_http.clone();
+                    let events = self.sh.events.clone();
+                    let owner = self.agent_id();
+                    let edits = self.inventory_udp_tx.clone();
+                    let create_cap = self.main_cap("CreateInventoryCategory");
+                    tokio::spawn(async move {
+                        let result = crate::outfits::mutate_udp(
+                            &http,
+                            create_cap.as_deref(),
+                            &fetch_cap,
+                            owner,
+                            change,
+                            |edit| inventory_udp::submit(edits.clone(), edit),
+                            &|folder| announce_folder(&events, folder),
+                        )
+                        .await;
+                        let _ = events.send(NetEvent::OutfitUpdated { request, result });
+                    });
+                    return;
+                }
                 let caps = self.main_cap("InventoryAPIv3").zip(self.main_cap("FetchInventoryDescendents2"));
                 let Some((cap, fetch_cap)) = caps else {
                     emit(
@@ -2743,6 +2855,33 @@ impl Session<'_> {
                     let result = crate::outfits::mutate(&http, &cap, &fetch_cap, owner, change).await;
                     let _ = events.send(NetEvent::OutfitUpdated { request, result });
                 });
+            }
+            NetCommand::UploadBake { request, j2c } => {
+                let Some(cap) = self.main_cap("UploadBakedTexture") else {
+                    emit(
+                        self.sh,
+                        NetEvent::BakeUploaded {
+                            request,
+                            result: Err(aurora_i18n::tr!("local-bakes-the-bake-could-not-be-uploaded").into()),
+                        },
+                    );
+                    return;
+                };
+                let http = self.sh.caps_http.clone();
+                let events = self.sh.events.clone();
+                tokio::spawn(async move {
+                    let result = crate::local_bakes::upload(&http, &cap, j2c).await;
+                    if let Err(e) = &result {
+                        log::warn!("local bake: {e}");
+                    }
+                    let _ = events.send(NetEvent::BakeUploaded { request, result });
+                });
+            }
+            NetCommand::SetAppearance(appearance) => {
+                // pre-incremented: the first is 1 (LLAgent::sendAgentSetAppearance)
+                self.appearance_serial = self.appearance_serial.wrapping_add(1);
+                let m = crate::local_bakes::agent_set_appearance(self.agent_id(), self.session_id(), self.appearance_serial, &appearance);
+                self.send_main(&m, true);
             }
             NetCommand::RequestServerAppearance { cof_version } => self.request_server_appearance(cof_version),
             NetCommand::IncrementCofVersion => self.increment_cof_version(),
@@ -2890,7 +3029,7 @@ impl Session<'_> {
                         NetEvent::DisplayNamesFailed(ids)
                     }
                     Err(e) => {
-                        log::warn!("GetDisplayNames: {e}");
+                        log::warn!("GetDisplayNames: {}", e.without_url());
                         NetEvent::DisplayNamesFailed(ids)
                     }
                 };
@@ -2936,7 +3075,7 @@ impl Session<'_> {
             let failed = match resp {
                 Ok(r) if r.status().is_success() => None,
                 Ok(r) => Some((r.status().as_u16() as i32, r.status().to_string())),
-                Err(e) => Some((0, e.to_string())),
+                Err(e) => Some((0, e.without_url().to_string())),
             };
             if let Some((status, reason)) = failed {
                 log::warn!("SetDisplayName failed: {reason}");
@@ -2990,7 +3129,7 @@ impl Session<'_> {
             let reason = match resp {
                 Ok(r) if r.status().is_success() => return,
                 Ok(r) => format!("HTTP {}", r.status().as_u16()),
-                Err(e) => e.to_string(),
+                Err(e) => e.without_url().to_string(),
             };
             log::warn!("AgentProfile PUT {target}: {reason}");
             let _ = events.send(NetEvent::ProfileSaveFailed { target, reason });
@@ -3409,7 +3548,7 @@ impl Session<'_> {
                     }
                 }
                 Err(e) => {
-                    log::warn!("appearance request failed: {e}");
+                    log::warn!("appearance request failed: {}", e.without_url());
                     (false, None)
                 }
             };
@@ -3452,7 +3591,7 @@ impl Session<'_> {
                         }
                     }
                     Ok(resp) => Err(format!("HTTP {}", resp.status().as_u16())),
-                    Err(e) => Err(e.to_string()),
+                    Err(e) => Err(e.without_url().to_string()),
                 };
                 match reply {
                     Ok(v) => {
@@ -3550,7 +3689,7 @@ impl Session<'_> {
                         continue;
                     };
                     let port = info["Port"].as_i32() as u16;
-                    let size = (info["RegionSizeX"].as_u32().max(256), info["RegionSizeY"].as_u32().max(256));
+                    let size = (region_side(info["RegionSizeX"].as_u32()), region_side(info["RegionSizeY"].as_u32()));
                     let addr = SocketAddr::V4(SocketAddrV4::new(ip, port));
                     // process_enable_simulator (llworld.cpp): no circuit to a
                     // neighbour; the simulator keeps its child agent
@@ -3608,7 +3747,7 @@ impl Session<'_> {
                     ip_from_llsd(&info["SimIP"]),
                     info["SimPort"].as_i32() as u16,
                     info["SeedCapability"].as_str().to_owned(),
-                    (info["RegionSizeX"].as_u32().max(256), info["RegionSizeY"].as_u32().max(256)),
+                    (region_side(info["RegionSizeX"].as_u32()), region_side(info["RegionSizeY"].as_u32())),
                 );
             }
             "CrossedRegion" => {
@@ -3623,7 +3762,7 @@ impl Session<'_> {
                     ip_from_llsd(&rd["SimIP"]),
                     rd["SimPort"].as_i32() as u16,
                     rd["SeedCapability"].as_str().to_owned(),
-                    (rd["RegionSizeX"].as_u32().max(256), rd["RegionSizeY"].as_u32().max(256)),
+                    (region_side(rd["RegionSizeX"].as_u32()), region_side(rd["RegionSizeY"].as_u32())),
                 );
             }
             "ParcelProperties" => {
@@ -4211,6 +4350,9 @@ impl Session<'_> {
                     rights: m.rights.iter().map(|r| (r.agent_related, r.related_rights)).collect(),
                 },
             );
+        } else if id == RebakeAvatarTextures::ID {
+            let m: RebakeAvatarTextures = pkt.decode()?;
+            emit(self.sh, NetEvent::RebakeRequested(m.texture_data.texture_id));
         } else if id == AvatarPropertiesReply::ID {
             let m: AvatarPropertiesReply = pkt.decode()?;
             let pd = &m.properties_data;
@@ -4428,11 +4570,12 @@ impl Session<'_> {
             }
         } else if id == CoarseLocationUpdate::ID {
             let m: CoarseLocationUpdate = pkt.decode()?;
+            let size = self.sims.get(&from).map_or((256, 256), |sim| sim.size);
             let positions = m
                 .location
                 .iter()
                 .zip(m.agent_data.iter())
-                .map(|(l, a)| (a.agent_id, Vec3::new(l.x as f32, l.y as f32, l.z as f32 * 4.0)))
+                .map(|(l, a)| (a.agent_id, coarse_position(l.x, l.y, l.z, size)))
                 .collect();
             emit(
                 self.sh,
@@ -4522,13 +4665,15 @@ impl Session<'_> {
                 self.remove_sim(from);
             }
         } else if id == ParcelOverlay::ID {
-            // LLViewerParcelMgr::processParcelOverlay: one quarter of the
+            // LLViewerParcelMgr::processParcelOverlay: 1024 cells of the
             // region's 4 m grid per message (property lines, for sale)
             let m: ParcelOverlay = pkt.decode()?;
+            let size = self.sims.get(&from).map_or((256, 256), |sim| sim.size);
             emit(
                 self.sh,
                 NetEvent::ParcelOverlay {
                     handle: self.handle_of(from),
+                    size,
                     sequence: m.parcel_data.sequence_id,
                     data: m.parcel_data.data,
                 },
@@ -5176,6 +5321,43 @@ fn follow_cam_event(pkt: &IncomingPacket, handle: RegionHandle) -> Result<Option
     }
 }
 
+/// A CoarseLocationUpdate position in metres. Its X and Y are bytes, so a
+/// region past 256 m sends them scaled to fit (SceneGraph.cs, OpenSim), and
+/// the viewer scales them back (LLViewerRegion::updateCoarseLocations, there
+/// with the width on both axes). Z is in steps of 4 m.
+fn coarse_position(x: u8, y: u8, z: u8, size: (u32, u32)) -> Vec3 {
+    Vec3::new(
+        f32::from(x) * size.0 as f32 / 256.0,
+        f32::from(y) * size.1 as f32 / 256.0,
+        f32::from(z) * 4.0,
+    )
+}
+
+#[cfg(test)]
+mod coarse_tests {
+    use super::*;
+
+    #[test]
+    fn coarse_positions_scale_back_with_each_axis_of_the_region() {
+        assert_eq!(coarse_position(100, 200, 10, (256, 256)), Vec3::new(100.0, 200.0, 40.0));
+        assert_eq!(coarse_position(100, 200, 10, (1024, 512)), Vec3::new(400.0, 400.0, 40.0));
+    }
+}
+
+#[cfg(test)]
+mod region_side_tests {
+    use super::*;
+
+    #[test]
+    fn announced_region_sides_are_held_to_the_grid_limits() {
+        assert_eq!(region_side(0), 256);
+        assert_eq!(region_side(256), 256);
+        assert_eq!(region_side(1024), 1024);
+        assert_eq!(region_side(MAX_REGION_SIDE), MAX_REGION_SIDE);
+        assert_eq!(region_side(u32::MAX), MAX_REGION_SIDE);
+    }
+}
+
 #[cfg(test)]
 mod follow_cam_tests {
     use super::*;
@@ -5460,6 +5642,13 @@ mod reset_skeleton_tests {
 }
 
 impl Session<'_> {
+    /// The fetch service, on a grid that has it and no AIS (OpenSim). `None`
+    /// on a grid with AIS, and until the region's capabilities have come.
+    fn fetch_without_ais(&self) -> Option<String> {
+        self.main_cap("FetchInventoryDescendents2")
+            .filter(|_| self.main_cap("InventoryAPIv3").is_none())
+    }
+
     fn inventory_callback(&mut self, created: bool) -> u32 {
         loop {
             self.next_inventory_callback = self.next_inventory_callback.wrapping_add(1).max(1);
@@ -5919,6 +6108,7 @@ mod event_queue_tests {
         let (caps_tx, _) = mpsc::unbounded_channel();
         let (notecard_copy_tx, _) = mpsc::unbounded_channel();
         let (inventory_move_tx, _) = mpsc::unbounded_channel();
+        let (inventory_udp_tx, _) = mpsc::unbounded_channel();
         Session {
             sh,
             sock,
@@ -5929,6 +6119,8 @@ mod event_queue_tests {
             caps_tx,
             notecard_copy_tx,
             inventory_move_tx,
+            inventory_udp_tx,
+            appearance_serial: 0,
             notecard_copies: HashMap::new(),
             agent_update: AgentUpdateRule::new(Instant::now()),
             control_flags: 0,
@@ -6180,11 +6372,14 @@ mod event_queue_tests {
         assert!(session.sims[&neighbour_addr].caps_again_task.is_some());
         assert_eq!(session.main_cap("ViewerAsset").as_deref(), Some("http://127.0.0.1:9/ViewerAsset"));
         assert_eq!(session.main_cap("InventoryAPIv3"), None);
+        // the seed has not answered: no reason to think the grid lacks AIS
+        assert_eq!(session.fetch_without_ais(), None);
 
         // the second answer grants more: it takes the place of the first;
         // a smaller or failed one afterwards changes nothing
         session.on_caps(neighbour_addr, &seed, Ok(agent.clone()));
         assert!(session.main_cap("InventoryAPIv3").is_some());
+        assert_eq!(session.fetch_without_ais(), None);
         session.on_caps(neighbour_addr, &seed, Ok(child));
         session.on_caps(neighbour_addr, &seed, Err("status 503".into()));
         assert_eq!(session.sims[&neighbour_addr].caps.len(), 4);
@@ -6200,6 +6395,7 @@ mod event_queue_tests {
         assert!(session.sims[&neighbour_addr].caps.is_empty());
         session.on_caps(neighbour_addr, &new_seed, Ok(agent));
         assert!(session.main_cap("InventoryAPIv3").is_some());
+        assert_eq!(session.fetch_without_ais(), None);
         assert_eq!(caps_events(&received), [(20, 4)]);
     }
 }
@@ -6252,6 +6448,7 @@ mod script_dialog_tests {
         let (caps_tx, _) = mpsc::unbounded_channel();
         let (notecard_copy_tx, _) = mpsc::unbounded_channel();
         let (inventory_move_tx, _) = mpsc::unbounded_channel();
+        let (inventory_udp_tx, _) = mpsc::unbounded_channel();
         Session {
             sh,
             sock,
@@ -6262,6 +6459,8 @@ mod script_dialog_tests {
             caps_tx,
             notecard_copy_tx,
             inventory_move_tx,
+            inventory_udp_tx,
+            appearance_serial: 0,
             notecard_copies: HashMap::new(),
             agent_update: AgentUpdateRule::new(Instant::now()),
             control_flags: 0,
