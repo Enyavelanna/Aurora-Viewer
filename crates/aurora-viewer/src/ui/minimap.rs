@@ -667,6 +667,17 @@ impl MiniMap {
         } else {
             Default::default()
         };
+        // The group titles worn around, for the colours given to a group.
+        let titles: std::collections::HashMap<Uuid, String> =
+            if opts.tactical.available() && opts.tactical.dots_enabled && !opts.tactical.title_colors.is_empty() {
+                world
+                    .objects
+                    .avatars()
+                    .filter_map(|(_, o)| o.group_title().map(|t| (o.full_id, t)))
+                    .collect()
+            } else {
+                Default::default()
+            };
         for (id, pos, known) in avatars(world) {
             let g = to_global(world, pos);
             let sp = view.to_screen(g.0, g.1);
@@ -705,6 +716,11 @@ impl MiniMap {
                         .filter(|g| g.members.contains_key(&id))
                         .map(|_| crate::combat::tactical::color(*color))
                 })
+                .unwrap_or(col);
+            let col = titles
+                .get(&id)
+                .and_then(|title| opts.tactical.title_color(title))
+                .map(crate::combat::tactical::color)
                 .unwrap_or(col);
             let is_ally = ally_ids.contains(&id);
             let col = if is_ally {

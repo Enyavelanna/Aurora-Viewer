@@ -36,6 +36,7 @@ fade switch and UI scaling. Nearby callers' labels must not overlap or lose owne
 | Variable | Purpose |
 |---|---|
 | `AURORA_DEMO_COMBAT=1` | Open Combat with synthetic confirmed deaths, awards, markers and pings. |
+| `AURORA_DEMO_COMBAT=feed`, `feed-cards` | Kill feed in its test mode (made-up kills you can drag), compact or card style; use with `AURORA_DEMO_OPTIONS=combat/1` to see its settings card. |
 | `AURORA_DEMO_COMBAT=allies` | Ally the title "Aurora" (worn by every demo avatar) and the nearest avatar by name; use with `AURORA_DEMO_OPTIONS=combat/7`. |
 
 `AURORA_DEMO_COMBAT=navigation` creates explicit pings around the demo avatar,

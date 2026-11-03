@@ -336,6 +336,8 @@ pub(crate) struct Context {
     /// The residents around us, nearest first.
     pub nearby: Vec<Nearby>,
     pub active_group: Option<ActiveGroup>,
+    /// The group you wear, when you wear one.
+    pub worn_group: Option<Uuid>,
     /// Names of the teammates, coloured residents and senders not around.
     pub names: BTreeMap<Uuid, String>,
     /// Everyone who counts as an ally now (Allies tab).
@@ -401,6 +403,7 @@ impl Context {
                 .collect(),
             nearby,
             active_group,
+            worn_group: (!active.is_nil()).then_some(active),
             names,
             allies: cfg.allies.resolve(world, &cfg.recipients),
             allies_loading: cfg.allies.group_loading(world),
@@ -544,6 +547,8 @@ pub(crate) struct Settings {
     pub inbox: super::transfer::Inbox,
     pub share_group: bool,
     pub group_colors: BTreeMap<Uuid, [u8; 4]>,
+    /// A colour per group title worn around you: the group of a resident is only known by it.
+    pub title_colors: Vec<(String, [u8; 4])>,
     pub recipients: BTreeMap<Uuid, bool>,
     /// The Allies tab: the teammates above, the worn group and group titles.
     pub allies: super::allies::Allies,
@@ -626,6 +631,7 @@ impl Default for Settings {
             inbox: Default::default(),
             share_group: false,
             group_colors: BTreeMap::new(),
+            title_colors: Vec::new(),
             recipients: BTreeMap::new(),
             allies: Default::default(),
             ping_sound: false,
@@ -1005,6 +1011,31 @@ impl Settings {
         self.seen_messages.insert(marker.id, now);
         true
     }
+    /// The colour given to a group title, whatever its case or spacing.
+    pub fn title_color(&self, title: &str) -> Option<[u8; 4]> {
+        let key = super::allies::clean_tag(title).to_lowercase();
+        self.title_colors
+            .iter()
+            .find(|(t, _)| super::allies::clean_tag(t).to_lowercase() == key)
+            .map(|(_, c)| *c)
+    }
+    /// Gives a group title a colour (the one it has already is replaced).
+    pub fn set_title_color(&mut self, title: &str, color: [u8; 4]) {
+        let title = super::allies::clean_tag(title);
+        if title.is_empty() {
+            return;
+        }
+        let key = title.to_lowercase();
+        if let Some(entry) = self.title_colors.iter_mut().find(|(t, _)| t.to_lowercase() == key) {
+            entry.1 = color;
+        } else if self.title_colors.len() < 32 {
+            self.title_colors.push((title, color));
+        }
+    }
+    pub fn remove_title_color(&mut self, title: &str) {
+        let key = super::allies::clean_tag(title).to_lowercase();
+        self.title_colors.retain(|(t, _)| t.to_lowercase() != key);
+    }
     pub fn prune(&mut self) {
         self.share_error |= self.inbox.expire(Instant::now());
         self.pings.retain(|p| p.at.elapsed().as_secs_f32() < self.seconds.clamp(1.0, 60.0));
@@ -1182,33 +1213,149 @@ fn color_line(ui: &mut egui::Ui, p: &Palette, id: Uuid, name: &str, detail: &str
     });
 }
 
-/// The avatar colours of the Mini-map tab: the groups, then the residents
-/// with a colour (around or not), then the others around, nearest first.
+/// A line of a colour kept for a group title, with how many people wear it around you.
+fn title_line(ui: &mut egui::Ui, p: &Palette, title: &str, around: usize, cfg: &mut Settings, default: [u8; 4]) {
+    ui.horizontal(|ui| {
+        match cfg.title_colors.iter_mut().find(|(t, _)| t.eq_ignore_ascii_case(title)) {
+            Some((_, c)) => {
+                widgets::color_button(ui, p, ("title-color", title), c, false);
+            }
+            None => {
+                if widgets::flat_button(ui, p, tr!("tactical-color-set")).clicked() {
+                    cfg.set_title_color(title, default);
+                }
+            }
+        }
+        ui.label(title);
+        if around > 0 {
+            ui.label(
+                egui::RichText::new(tr!("tactical-colors-around", count = around.to_string()))
+                    .size(11.5)
+                    .color(p.muted),
+            );
+        }
+        if cfg.title_color(title).is_some() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::icon_button(ui, p, "x", tr!("tactical-color-remove"), true) {
+                    cfg.remove_title_color(title);
+                }
+            });
+        }
+    });
+}
+
+/// The most residents listed at once; a search finds the others.
+const RESIDENTS_SHOWN: usize = 30;
+
+/// The group titles worn around you with how many wear each, the most worn first.
+pub(crate) fn titles_around(context: &Context) -> Vec<(String, usize)> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for n in &context.nearby {
+        let Some(title) = n.title.as_deref().map(super::allies::clean_tag).filter(|t| !t.is_empty()) else {
+            continue;
+        };
+        match counts.iter_mut().find(|(t, _)| t.eq_ignore_ascii_case(&title)) {
+            Some(entry) => entry.1 += 1,
+            None => counts.push((title, 1)),
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    counts
+}
+
+/// The avatar colours of the Mini-map tab. Only what is on the sim: your worn group, the groups
+/// of the people around you (by the title over their head) and those people. Colours you gave
+/// to others that are not around come last, so they can be taken away.
 pub(crate) fn avatar_colors(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut Settings) -> bool {
-    let before = (cfg.player_colors.clone(), cfg.group_colors.clone());
+    let before = (cfg.player_colors.clone(), cfg.group_colors.clone(), cfg.title_colors.clone());
     let default = cfg.colors[0];
-    ui.label(egui::RichText::new(tr!("tactical-colors-groups")).size(11.5).color(p.muted));
-    if context.groups.is_empty() {
-        ui.label(egui::RichText::new(tr!("tactical-colors-no-groups")).color(p.muted));
+    let sub = |ui: &mut egui::Ui, text: &str| ui.label(egui::RichText::new(text).size(11.5).color(p.muted));
+
+    sub(ui, tr!("tactical-colors-groups"));
+    if let Some(group) = context.groups.iter().find(|(id, _)| context.worn_group == Some(*id)) {
+        color_line(
+            ui,
+            p,
+            group.0,
+            &group.1,
+            tr!("tactical-colors-worn"),
+            &mut cfg.group_colors,
+            default,
+        );
     }
-    for (id, name) in &context.groups {
-        color_line(ui, p, *id, name, "", &mut cfg.group_colors, default);
+    let around = titles_around(context);
+    for (title, count) in &around {
+        title_line(ui, p, title, *count, cfg, default);
     }
+    if around.is_empty() && context.worn_group.is_none() {
+        ui.label(egui::RichText::new(tr!("tactical-colors-no-titles")).color(p.muted));
+    }
+    // Colours kept for groups that are not around any more.
+    let gone: Vec<String> = cfg
+        .title_colors
+        .iter()
+        .map(|(t, _)| t.clone())
+        .filter(|t| !around.iter().any(|(a, _)| a.eq_ignore_ascii_case(t)))
+        .collect();
+    let saved: Vec<Uuid> = cfg
+        .group_colors
+        .keys()
+        .copied()
+        .filter(|id| context.worn_group != Some(*id))
+        .collect();
+    if !gone.is_empty() || !saved.is_empty() {
+        ui.add_space(4.0);
+        sub(ui, tr!("tactical-colors-saved"));
+        for title in &gone {
+            title_line(ui, p, title, 0, cfg, default);
+        }
+        for id in &saved {
+            let name = context.groups.iter().find(|(g, _)| g == id).map_or("…", |(_, n)| n.as_str());
+            color_line(ui, p, *id, name, "", &mut cfg.group_colors, default);
+        }
+    }
+
     ui.add_space(8.0);
-    ui.label(egui::RichText::new(tr!("tactical-colors-residents")).size(11.5).color(p.muted));
+    sub(ui, tr!("tactical-colors-residents"));
+    let search_id = ui.make_persistent_id("tactical-colors-search");
+    let mut search: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
+    ui.add(
+        egui::TextEdit::singleline(&mut search)
+            .hint_text(tr!("tactical-colors-search"))
+            .desired_width(f32::INFINITY),
+    );
+    let needle = search.trim().to_lowercase();
+    ui.data_mut(|d| d.insert_temp(search_id, search));
+    let wanted = |name: &str| needle.is_empty() || name.to_lowercase().contains(&needle);
     let coloured: Vec<Uuid> = cfg.player_colors.keys().copied().collect();
     for id in &coloured {
-        let around = context.nearby.iter().find(|n| n.id == *id);
-        let detail = around.map_or_else(|| tr!("sharing-away").to_owned(), distance_text);
-        color_line(ui, p, *id, &context.name_of(id), &detail, &mut cfg.player_colors, default);
+        let name = context.name_of(id);
+        if !wanted(&name) {
+            continue;
+        }
+        let near = context.nearby.iter().find(|n| n.id == *id);
+        let detail = near.map_or_else(|| tr!("sharing-away").to_owned(), distance_text);
+        color_line(ui, p, *id, &name, &detail, &mut cfg.player_colors, default);
     }
-    for n in context.nearby.iter().filter(|n| !coloured.contains(&n.id)) {
+    let others: Vec<&Nearby> = context
+        .nearby
+        .iter()
+        .filter(|n| !coloured.contains(&n.id) && wanted(&n.name))
+        .collect();
+    for n in others.iter().take(RESIDENTS_SHOWN) {
         color_line(ui, p, n.id, &n.name, &distance_text(n), &mut cfg.player_colors, default);
+    }
+    if others.len() > RESIDENTS_SHOWN {
+        ui.label(
+            egui::RichText::new(tr!("tactical-colors-more", count = (others.len() - RESIDENTS_SHOWN).to_string()))
+                .size(11.5)
+                .color(p.muted),
+        );
     }
     if coloured.is_empty() && context.nearby.is_empty() {
         ui.label(egui::RichText::new(tr!("tactical-colors-no-residents")).color(p.muted));
     }
-    before != (cfg.player_colors.clone(), cfg.group_colors.clone())
+    before != (cfg.player_colors.clone(), cfg.group_colors.clone(), cfg.title_colors.clone())
 }
 
 /// "24 m", or "~120 m" from a coarse location.
@@ -1353,6 +1500,39 @@ pub(super) fn paint_icon(painter: &egui::Painter, at: egui::Pos2, size: f32, nam
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_colours_follow_the_titles_worn_around_whatever_their_case() {
+        let mut cfg = Settings::default();
+        cfg.set_title_color("  Aurora   Builders ", [1, 2, 3, 255]);
+        assert_eq!(cfg.title_color("aurora builders"), Some([1, 2, 3, 255]));
+        cfg.set_title_color("AURORA BUILDERS", [9, 9, 9, 255]);
+        assert_eq!(cfg.title_colors.len(), 1);
+        cfg.remove_title_color("Aurora Builders");
+        assert!(cfg.title_colors.is_empty());
+    }
+
+    #[test]
+    fn only_the_titles_worn_around_are_listed_the_most_worn_first() {
+        let near = |n: u128, title: Option<&str>| Nearby {
+            id: Uuid::from_u128(n),
+            name: n.to_string(),
+            distance: Some(5.0),
+            approximate: false,
+            title: title.map(str::to_owned),
+        };
+        let context = Context {
+            nearby: vec![
+                near(1, Some("Wolves")),
+                near(2, None),
+                near(3, Some("Aurora")),
+                near(4, Some("wolves")),
+                near(5, Some(" ")),
+            ],
+            ..Context::default()
+        };
+        assert_eq!(titles_around(&context), vec![("Wolves".to_owned(), 2), ("Aurora".to_owned(), 1)]);
+    }
 
     #[test]
     fn combat_tactical_cooldown_is_shared_and_invalid_positions_do_not_consume_it() {

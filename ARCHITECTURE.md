@@ -1525,6 +1525,7 @@ provide the native four-sector hold wheel and off-camera edge guidance; `combat/
 region/grid-scoped annotation sets and bounded multipart sharing. The reward studio shares its presentation
 metadata with the staged in-world medal banner, and `ui/combat_editor.rs` is an independent region canvas over
 the active set. Settings live in a native floater (Me > Advanced > Combat); DAMAGE never plays a sound, marker or award.
+`combat/feed.rs` builds the kill feed rows (filters, damage type names, ally and friendly-fire marks, the test mode's made-up kills), lays them out in the compact or card style and handles the drag with edge snapping; `combat/ui.rs` only collects the entries.
 
 Inventory local-file thumbnails prepare whole-image square scaling
 (LLViewerTextureList::convertToUploadFile with force_square), proportional fit

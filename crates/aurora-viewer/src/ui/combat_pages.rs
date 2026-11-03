@@ -324,8 +324,9 @@ fn minimap(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi,
         },
         |ui, (s, st, changed)| {
             let off = tools_off(s) || !s.maps.tactical.dots_enabled;
-            let colours = !s.maps.tactical.player_colors.is_empty() || !s.maps.tactical.group_colors.is_empty();
-            let badge_text = s.maps.tactical.player_colors.len() + s.maps.tactical.group_colors.len();
+            let t = &s.maps.tactical;
+            let badge_text = t.player_colors.len() + t.group_colors.len() + t.title_colors.len();
+            let colours = badge_text > 0;
             let card = Card::new("palette-filled", tr!("tactical-colors-title"))
                 .help(tr!("tactical-colors-note"))
                 .modified(colours);
@@ -336,6 +337,7 @@ fn minimap(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi,
                 }) {
                     s.maps.tactical.player_colors.clear();
                     s.maps.tactical.group_colors.clear();
+                    s.maps.tactical.title_colors.clear();
                     **changed = true;
                 }
             });

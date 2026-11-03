@@ -66,6 +66,7 @@ Mark contacts, objectives, and regroup points without leaving mouselook. The pin
 - **One announcement per kill** — the biggest medal gets the sound and the banner, the others show as small chips.
 - **Award Studio** — Rename every medal, switch medals and families on or off, set a volume per family, configure images and sounds, preview them, and adjust the banner (size, duration, position, calm animation).
 - **Medals of everyone** — The kill feed and the journal list the medals earned by anyone on the region.
+- **Kill feed styles** — Compact or cards, filtered to everyone, only you, or your allies and you. Allies are coloured, friendly fire is flagged, and a test mode lets you drag the feed anywhere.
 
 ### Combat Log
 - **Dedicated Combat Tab** in Conversations.
