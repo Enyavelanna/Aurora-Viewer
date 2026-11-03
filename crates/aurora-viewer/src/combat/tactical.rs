@@ -1377,7 +1377,8 @@ pub(crate) fn marker_display(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings)
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
         for shape in [Shape::Rectangle, Shape::Line] {
-            if widgets::flat_button(ui, p, shape.label()).clicked() {
+            let icon = crate::ui::combat_editor::shape_icon(shape);
+            if widgets::action_button(ui, p, icon, shape.label(), widgets::ActionKind::Flat, egui::vec2(0.0, 26.0)).clicked() {
                 cfg.enabled = true;
                 cfg.draw = Some(shape);
                 cfg.drawing_start = None;
@@ -1391,9 +1392,16 @@ pub(crate) fn marker_display(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings)
 /// colour, its shape, its name, and a button to remove it. Shaping them is
 /// the region editor's job (Marker sets tab).
 pub(crate) fn marker_list(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg: &mut Settings) {
-    if ui
-        .add_enabled(context.position.is_some(), egui::Button::new(tr!("tactical-add")))
-        .clicked()
+    if widgets::action_button_if(
+        ui,
+        p,
+        "map-pin-filled",
+        tr!("tactical-add"),
+        widgets::ActionKind::Flat,
+        egui::vec2(0.0, 26.0),
+        context.position.is_some(),
+    )
+    .clicked()
         && let Some(position) = context.position
     {
         cfg.place_marker(Shape::Pin, position);
@@ -1448,18 +1456,20 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
         ui.text_edit_singleline(&mut set.name);
     }
     ui.horizontal_wrapped(|ui| {
-        if ui.button(tr!("tactical-set-new")).clicked() {
+        let size = egui::vec2(0.0, 26.0);
+        let flat = widgets::ActionKind::Flat;
+        if widgets::action_button(ui, p, "plus", tr!("tactical-set-new"), flat, size).clicked() {
             region.add(tr!("tactical-set-default").into(), &[]);
         }
-        if ui.button(tr!("tactical-set-duplicate")).clicked() {
+        if widgets::action_button(ui, p, "copy-filled", tr!("tactical-set-duplicate"), flat, size).clicked() {
             let name = region.selected().map(|s| s.name.clone()).unwrap_or_default();
             region.add(name, &cfg.markers);
             region.save_layers(&cfg.layers);
         }
-        if ui.button(tr!("tactical-remove")).clicked() {
+        if widgets::action_button(ui, p, "trash-filled", tr!("tactical-remove"), widgets::ActionKind::Danger, size).clicked() {
             region.remove_active();
         }
-        if ui.button(tr!("tactical-set-save")).clicked() {
+        if widgets::action_button(ui, p, "device-floppy-filled", tr!("tactical-set-save"), flat, size).clicked() {
             region.save(&cfg.markers);
             region.save_layers(&cfg.layers);
         }
@@ -1473,7 +1483,16 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
     if !cfg.library.unassigned.is_empty() {
         widgets::surface(ui, p, |ui| {
             ui.label(tr!("tactical-set-unassigned"));
-            if ui.button(tr!("tactical-set-assign")).clicked() {
+            if widgets::action_button(
+                ui,
+                p,
+                "check",
+                tr!("tactical-set-assign"),
+                widgets::ActionKind::Flat,
+                egui::vec2(0.0, 26.0),
+            )
+            .clicked()
+            {
                 let markers = std::mem::take(&mut cfg.library.unassigned);
                 let region = cfg.library.region_mut(&key, "");
                 region.add(tr!("tactical-set-unassigned").into(), &markers);

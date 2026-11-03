@@ -33,45 +33,52 @@ pub(crate) fn line(row: &RecordedEvent, world: &World, display: &Display) -> Str
     text
 }
 /// The fights that are over, newest first.
-fn recaps(ui: &mut egui::Ui, state: &State) {
+fn recaps(ui: &mut egui::Ui, p: &Palette, state: &State) {
     if state.recaps.is_empty() {
         return;
     }
-    egui::CollapsingHeader::new(tr!("combat-recaps"))
-        .id_salt("combat-recaps")
-        .show(ui, |ui| {
-            for recap in state.recaps.iter().rev() {
-                let mut text = format!(
-                    "[{}] {}",
-                    recap.timestamp,
-                    tr!(
-                        "combat-recap-line",
-                        kills = recap.kills.to_string(),
-                        deaths = recap.deaths.to_string(),
-                        streak = recap.best_streak.to_string(),
-                        seconds = recap.seconds.to_string()
-                    )
-                );
-                if !recap.medals.is_empty() {
-                    let medals: Vec<String> = recap
-                        .medals
-                        .iter()
-                        .map(|(award, n)| format!("{} ×{n}", state.display.name(*award)))
-                        .collect();
-                    text.push_str(&format!("  ·  {}", medals.join(", ")));
-                }
-                ui.add(egui::Label::new(text).wrap());
+    crate::ui::widgets::collapsing(ui, p, "combat-recaps", tr!("combat-recaps"), false, |ui| {
+        for recap in state.recaps.iter().rev() {
+            let mut text = format!(
+                "[{}] {}",
+                recap.timestamp,
+                tr!(
+                    "combat-recap-line",
+                    kills = recap.kills.to_string(),
+                    deaths = recap.deaths.to_string(),
+                    streak = recap.best_streak.to_string(),
+                    seconds = recap.seconds.to_string()
+                )
+            );
+            if !recap.medals.is_empty() {
+                let medals: Vec<String> = recap
+                    .medals
+                    .iter()
+                    .map(|(award, n)| format!("{} ×{n}", state.display.name(*award)))
+                    .collect();
+                text.push_str(&format!("  ·  {}", medals.join(", ")));
             }
-        });
+            ui.add(egui::Label::new(text).wrap());
+        }
+    });
 }
-pub(crate) fn journal(ui: &mut egui::Ui, world: &World, state: &mut State) {
-    recaps(ui, state);
+pub(crate) fn journal(ui: &mut egui::Ui, p: &Palette, world: &World, state: &mut State) {
+    recaps(ui, p, state);
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut state.personal_view, false, tr!("combat-global"));
-        ui.selectable_value(&mut state.personal_view, true, tr!("combat-personal"));
-        if ui
-            .add_enabled(!state.journal.clearing(), egui::Button::new(tr!("combat-clear-journal")))
-            .clicked()
+        let mut view = usize::from(state.personal_view);
+        if crate::ui::widgets::segmented(ui, p, &mut view, &[(tr!("combat-global"), false), (tr!("combat-personal"), false)]) {
+            state.personal_view = view == 1;
+        }
+        if crate::ui::widgets::action_button_if(
+            ui,
+            p,
+            "trash-filled",
+            tr!("combat-clear-journal"),
+            crate::ui::widgets::ActionKind::Flat,
+            vec2(0.0, 26.0),
+            !state.journal.clearing(),
+        )
+        .clicked()
         {
             state.journal.request_clear(state.history.len());
         }

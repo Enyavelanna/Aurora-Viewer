@@ -1144,7 +1144,7 @@ fn main_menus(ui: &mut egui::Ui, p: &Palette, panels: &mut Panels, st: &StatusIn
             flip_window(
                 ui,
                 p,
-                "crosshair",
+                "swords",
                 aurora_i18n::tr!("combat-title"),
                 crate::ui::combat_window::WINDOW,
                 &mut panels.combat,

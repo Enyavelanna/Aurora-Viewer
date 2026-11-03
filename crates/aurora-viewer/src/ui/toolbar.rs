@@ -204,6 +204,13 @@ impl ToolbarSettings {
         for side in [&mut self.left, &mut self.right] {
             side.retain(|b| !b.command.is_empty() && seen.insert(b.command.clone()));
         }
+        // The Combat button was a shield, the moderation icon, before it had its own.
+        let bottom = self.buttons.iter_mut().flatten();
+        for button in bottom.chain(&mut self.left).chain(&mut self.right) {
+            if button.command == "combat" && button.icon == "shield-filled" {
+                button.icon = "swords".into();
+            }
+        }
     }
 }
 

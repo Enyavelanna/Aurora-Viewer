@@ -129,7 +129,12 @@ pub(crate) fn active(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, identit
                     if ping.own() {
                         ui.label(egui::RichText::new(sharing(ping.sharing)).small().color(p.muted));
                         for id in &ping.responders {
-                            ui.label(format!("✓ {}", identities.get(id).cloned().unwrap_or_else(|| id.to_string())));
+                            ui.horizontal(|ui| {
+                                if let Some(icon) = crate::ui::icons::global("check") {
+                                    ui.add(egui::Image::new((icon.id(), egui::Vec2::splat(13.0))).tint(p.success));
+                                }
+                                ui.label(identities.get(id).cloned().unwrap_or_else(|| id.to_string()));
+                            });
                         }
                     }
                 });

@@ -1124,9 +1124,10 @@ impl MiniMap {
                     }
                 }
                 if opts.tactical.pings_enabled {
-                    menu::submenu(ui, p, "map-pin-filled", aurora_i18n::tr!("combat-menu-ping"), true, |ui| {
+                    menu::submenu(ui, p, "flag-filled", aurora_i18n::tr!("combat-menu-ping"), true, |ui| {
                         for kind in 0..4 {
-                            if menu::item(ui, p, "map-pin-filled", crate::combat::tactical::kind_name(kind)) {
+                            let icon = opts.tactical.icons[kind].clone();
+                            if menu::item(ui, p, &icon, crate::combat::tactical::kind_name(kind)) {
                                 opts.tactical.ping(at, kind);
                             }
                         }
@@ -1135,13 +1136,19 @@ impl MiniMap {
                 if opts.tactical.enabled {
                     menu::submenu(ui, p, "pencil-filled", aurora_i18n::tr!("combat-menu-draw"), true, |ui| {
                         for shape in [crate::combat::tactical::Shape::Rectangle, crate::combat::tactical::Shape::Line] {
-                            if menu::item(ui, p, "map-pin-filled", shape.label()) {
+                            if menu::item(ui, p, crate::ui::combat_editor::shape_icon(shape), shape.label()) {
                                 opts.tactical.draw = Some(shape);
                                 opts.tactical.drawing_start = None;
                             }
                         }
                     });
-                    menu::toggle(ui, p, "edit", aurora_i18n::tr!("tactical-edit"), &mut opts.tactical.editing);
+                    menu::toggle(
+                        ui,
+                        p,
+                        "pointer-filled",
+                        aurora_i18n::tr!("tactical-edit"),
+                        &mut opts.tactical.editing,
+                    );
                     if menu::item(ui, p, "pencil-filled", aurora_i18n::tr!("combat-editor-open")) {
                         actions.push(MiniMapAction::OpenMarkerEditor);
                     }
@@ -1149,7 +1156,7 @@ impl MiniMap {
                 menu::toggle(
                     ui,
                     p,
-                    "lock-filled",
+                    "focus-centered",
                     aurora_i18n::tr!("tactical-fixed-center"),
                     &mut opts.tactical.fixed_center,
                 );

@@ -46,7 +46,7 @@ pub const COMMANDS: &[Command] = commands![
     "worldmap", "Command_Map_Icon", "common-world-map", true;
     "minimap", "Command_MiniMap_Icon", "common-mini-map", true;
     "performance", "Command_Performance_Icon", "common-performance", true;
-    "combat", "shield-filled", "combat-title", true;
+    "combat", "swords", "combat-title", true;
     "sit", "groundsit", "extra-sit-on-ground-stand-up", true;
     "ao", "AO", "ao-title", true;
     "movement", "swimming", "movement-swimming", true;

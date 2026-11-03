@@ -219,6 +219,8 @@ struct Laid {
     size: egui::Vec2,
     texts: Vec<(egui::Pos2, Arc<egui::Galley>)>,
     chips: Vec<(Rect, Arc<egui::Galley>, Color32)>,
+    /// Tabler icons: where their centre is, the icon, its colour and its size.
+    glyphs: Vec<(egui::Pos2, &'static str, Color32, f32)>,
 }
 
 struct Look {
@@ -266,6 +268,7 @@ fn lay(ui: &egui::Ui, p: &Palette, cfg: &Settings, e: &Entry, look: &Look) -> La
     let galley = |text: String, s: f32, color: Color32| ui.painter().layout_no_wrap(text, font(s), color);
     let (pad_x, pad_y, bar) = if cards { (12.0, 8.0, 4.0) } else { (9.0, 4.0, 3.0) };
     let mut texts = Vec::new();
+    let mut glyphs: Vec<(egui::Pos2, &'static str, Color32, f32)> = Vec::new();
     let mut x = bar + pad_x;
     let head_size = if cards { size * 1.1 } else { size };
     let head = |text: String, color: Color32, texts: &mut Vec<(egui::Pos2, Arc<egui::Galley>)>, x: &mut f32| {
@@ -275,7 +278,14 @@ fn lay(ui: &egui::Ui, p: &Palette, cfg: &Settings, e: &Entry, look: &Look) -> La
     };
     if let Some(killer) = &e.killer {
         head(killer.clone(), look.killer, &mut texts, &mut x);
-        head("  →  ".to_owned(), look.dim, &mut texts, &mut x);
+        let arrow = head_size * 0.9;
+        glyphs.push((
+            egui::pos2(x + 8.0 + arrow / 2.0, pad_y + head_size * 0.625),
+            "arrow-right",
+            look.dim,
+            arrow,
+        ));
+        x += arrow + 16.0;
         head(e.victim.clone(), look.victim, &mut texts, &mut x);
     } else {
         head(e.victim.clone(), look.victim, &mut texts, &mut x);
@@ -338,19 +348,18 @@ fn lay(ui: &egui::Ui, p: &Palette, cfg: &Settings, e: &Entry, look: &Look) -> La
         height = h + pad_y * 2.0;
     }
     if e.friendly_fire {
-        let g = galley(format!("  ⚠ {}", tr!("combat-feed-friendly")), small, p.amber);
-        let at = if cards {
-            egui::pos2(width - pad_x, pad_y)
-        } else {
-            egui::pos2(width - pad_x, pad_y + (head_size * 1.25 - g.size().y) / 2.0)
-        };
-        width += g.size().x;
-        texts.push((at, g));
+        let g = galley(tr!("combat-feed-friendly").to_owned(), small, p.amber);
+        let (icon, mid) = (small * 1.1, pad_y + head_size * 0.625);
+        let left = width - pad_x + 10.0;
+        glyphs.push((egui::pos2(left + icon / 2.0, mid), "alert-triangle-filled", p.amber, icon));
+        texts.push((egui::pos2(left + icon + 4.0, mid - g.size().y / 2.0), g.clone()));
+        width += 10.0 + icon + 4.0 + g.size().x;
     }
     Laid {
         size: vec2(width, height),
         texts,
         chips,
+        glyphs,
     }
 }
 
@@ -395,11 +404,16 @@ pub(crate) fn show(ctx: &egui::Context, p: &Palette, cfg: &Settings, entries: &[
                 let row = Rect::from_min_size(egui::pos2(at, slot.top()), laid.size);
                 let painter = ui.painter().clone().with_clip_rect(ui.ctx().content_rect());
                 let fade = alpha * cfg.feed_opacity.clamp(0.0, 1.0);
+                // a dense base so the names read over a bright scene, the role's tint over it
+                painter.rect_filled(row, radius, p.panel.gamma_multiply(0.88 * fade));
                 painter.rect_filled(row, radius, look.back.gamma_multiply(fade));
                 let bar = Rect::from_min_size(row.min, vec2(if cfg.feed_style == STYLE_CARDS { 4.0 } else { 3.0 }, row.height()));
                 painter.rect_filled(bar, radius, look.accent.gamma_multiply(fade));
                 for (offset, galley) in laid.texts {
                     painter.galley(row.min + offset.to_vec2(), galley, Color32::WHITE.gamma_multiply(fade));
+                }
+                for (at, icon, color, size) in laid.glyphs {
+                    crate::ui::widgets::paint_glyph(&painter, icon, row.min + at.to_vec2(), size, color.gamma_multiply(fade));
                 }
                 for (r, galley, accent) in laid.chips {
                     let r = r.translate(row.min.to_vec2());

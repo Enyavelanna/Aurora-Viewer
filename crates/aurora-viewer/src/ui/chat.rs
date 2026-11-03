@@ -2756,9 +2756,9 @@ pub(crate) fn default_rect(work: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_size(work.right_bottom() - egui::Vec2::splat(gap) - size, size)
 }
 
-fn combat_pane(ui: &mut egui::Ui, _p: &Palette, world: &World, st: &mut ChatUi) {
+fn combat_pane(ui: &mut egui::Ui, p: &Palette, world: &World, st: &mut ChatUi) {
     if st.combat_journal_enabled {
-        crate::combat::ui::journal(ui, world, &mut st.combat);
+        crate::combat::ui::journal(ui, p, world, &mut st.combat);
     }
 }
 
@@ -2967,7 +2967,22 @@ pub fn show(
                         st.select_tab(None);
                     }
                 }
-                if st.combat_journal_enabled && ui.selectable_label(st.combat_selected, aurora_i18n::tr!("combat-title")).clicked() {
+                if st.combat_journal_enabled
+                    && list_entry(
+                        ui,
+                        p,
+                        aurora_i18n::tr!("combat-title"),
+                        None,
+                        None,
+                        st.combat_selected,
+                        0,
+                        None,
+                        0.0,
+                        false,
+                    )
+                    .resp
+                    .clicked()
+                {
                     st.combat_selected = true;
                     st.contacts = false;
                 }

@@ -58,7 +58,7 @@ fn overview(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, _d: &Settings) -> 
     .filter(|v| **v)
     .count();
     let mut changed = false;
-    Card::new("crosshair", tr!("combat-preferences-title"))
+    Card::new("swords", tr!("combat-preferences-title"))
         .badge(tr!("combat-overview-count", count = on.to_string(), total = "9".to_owned()))
         .help(tr!("combat-preferences-about"))
         .show(ui, p, |_| {});
@@ -75,7 +75,7 @@ fn overview(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, _d: &Settings) -> 
                 **changed |= switch_row(ui, p, &mut s.combat.kill_sound, tr!("combat-kill-sound"), "");
             });
             gap(ui);
-            Card::new("star", tr!("combat-page-rewards")).show(ui, p, |ui| {
+            Card::new("star-filled", tr!("combat-page-rewards")).show(ui, p, |ui| {
                 **changed |= switch_row(ui, p, &mut s.combat.voices, tr!("combat-voices"), "");
                 **changed |= switch_row(ui, p, &mut s.combat.medals, tr!("combat-medals"), "");
             });
@@ -230,7 +230,7 @@ fn awards(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, 
     let mut changed = false;
     let d = crate::combat::Settings::default();
     let c = &mut s.combat;
-    if Card::new("star", tr!("combat-rewards"))
+    if Card::new("star-filled", tr!("combat-rewards"))
         .modified(c.voices != d.voices || c.medals != d.medals || c.voice_volume != d.voice_volume)
         .show(ui, p, |ui| {
             changed |= switch_row(ui, p, &mut c.voices, tr!("combat-voices"), "");
@@ -299,7 +299,7 @@ fn minimap(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi,
             let dots = (t.dots_enabled, t.dot_scale, t.outline_width, t.outline);
             let dots_default = (dt.dots_enabled, dt.dot_scale, dt.outline_width, dt.outline);
             ui.add_enabled_ui(tools_on, |ui| {
-                if Card::new("user", tr!("tactical-dots-title"))
+                if Card::new("user-filled", tr!("tactical-dots-title"))
                     .modified(dots != dots_default)
                     .show(ui, p, |ui| {
                         **changed |= switch_row(

@@ -386,7 +386,7 @@ pub(super) fn show(
             }
             if st.combat_journal_enabled && matches(aurora_i18n::tr!("combat-title")) {
                 let e = Entry {
-                    icon: Icon::Glyph("alert-triangle-filled", p.rose),
+                    icon: Icon::Glyph("swords", p.rose),
                     name_color: None,
                     name: aurora_i18n::tr!("combat-title"),
                     sub: None,

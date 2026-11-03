@@ -1990,11 +1990,13 @@ impl Editor {
                     layer.locked = !layer.locked;
                 }
                 let active = self.layer == li;
-                if ui
-                    .selectable_label(active, if active { "●" } else { "○" })
-                    .on_hover_text(tr!("combat-editor-layer-active"))
-                    .clicked()
-                {
+                if widgets::icon_button(
+                    ui,
+                    p,
+                    if active { "pencil-filled" } else { "pencil-off" },
+                    tr!("combat-editor-layer-active"),
+                    true,
+                ) {
                     self.layer = li;
                 }
                 ui.add(egui::TextEdit::singleline(&mut layer.name).char_limit(24).desired_width(100.0));

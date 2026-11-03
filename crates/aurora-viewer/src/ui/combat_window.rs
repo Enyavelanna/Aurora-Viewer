@@ -73,13 +73,13 @@ impl CombatWindow {
                         ui.set_width(170.0);
                         for (tab, (icon, label)) in [
                             ("layout-dashboard-filled", tr!("monitor-tab-overview")),
-                            ("crosshair", tr!("combat-page-feedback")),
+                            ("bolt-filled", tr!("combat-page-feedback")),
                             ("star-filled", tr!("combat-page-rewards")),
-                            ("world-filled", tr!("combat-page-minimap")),
+                            ("map", tr!("combat-page-minimap")),
                             ("map-pin-filled", tr!("combat-page-sets")),
                             ("flag-filled", tr!("combat-page-pings")),
-                            ("users-group", tr!("combat-page-sharing")),
-                            ("shield-filled", tr!("combat-page-allies")),
+                            ("share", tr!("combat-page-sharing")),
+                            ("heart-handshake", tr!("combat-page-allies")),
                         ]
                         .into_iter()
                         .enumerate()

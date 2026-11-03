@@ -99,8 +99,24 @@ pub(crate) fn badge(ui: &mut egui::Ui, p: &Palette, text: &str, color: Color32) 
 /// A switch shown as a pill with a state dot (Sending, Receiving).
 pub(crate) fn pill(ui: &mut egui::Ui, p: &Palette, on: &mut bool, text: &str, tip: &str) {
     let color = if *on { p.success } else { p.muted_dim };
-    let label = RichText::new(format!("● {text}")).color(color);
-    if ui.selectable_label(*on, label).on_hover_text(tip).clicked() {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font, if *on { p.ink } else { p.muted });
+    let (dot, gap, pad) = (4.0, 6.0, egui::vec2(10.0, 5.0));
+    let size = egui::vec2(pad.x * 2.0 + dot * 2.0 + gap + galley.size().x, pad.y * 2.0 + galley.size().y);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let resp = resp.on_hover_text(tip);
+    let face = if resp.hovered() { p.raised } else { p.raised.gamma_multiply(0.7) };
+    ui.painter().rect_filled(rect, ui.visuals().widgets.inactive.corner_radius, face);
+    ui.painter()
+        .circle_filled(egui::pos2(rect.left() + pad.x + dot, rect.center().y), dot, color);
+    ui.painter().galley(
+        egui::pos2(rect.left() + pad.x + dot * 2.0 + gap, rect.center().y - galley.size().y / 2.0),
+        galley,
+        p.ink,
+    );
+    if resp.clicked() {
         *on = !*on;
     }
 }
