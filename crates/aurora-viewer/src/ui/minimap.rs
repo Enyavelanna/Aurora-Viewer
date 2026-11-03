@@ -660,6 +660,13 @@ impl MiniMap {
         let pointer = resp.hover_pos();
         let mut closest: Option<(f32, Uuid, Vec3, bool)> = None;
         let mut under: Vec<Uuid> = Vec::new();
+        // Allies (Combat > Allies): their own colour, under a colour picked for one resident.
+        let allies = &opts.tactical.allies;
+        let ally_ids = if opts.tactical.available() && allies.minimap {
+            allies.resolve(world, &opts.tactical.recipients)
+        } else {
+            Default::default()
+        };
         for (id, pos, known) in avatars(world) {
             let g = to_global(world, pos);
             let sp = view.to_screen(g.0, g.1);
@@ -699,6 +706,12 @@ impl MiniMap {
                         .map(|_| crate::combat::tactical::color(*color))
                 })
                 .unwrap_or(col);
+            let is_ally = ally_ids.contains(&id);
+            let col = if is_ally {
+                crate::combat::tactical::color(allies.color)
+            } else {
+                col
+            };
             let col = opts
                 .tactical
                 .player_colors
@@ -714,6 +727,9 @@ impl MiniMap {
                 );
             }
             draw_avatar(&painter, sp, dot_r, col, dz);
+            if is_ally && allies.ring {
+                painter.circle_stroke(sp, dot_r + 3.0, Stroke::new(1.5, col));
+            }
             if let Some(m) = pointer {
                 let d = sp.distance(m);
                 if d < dot_r * PICK_SCALE {

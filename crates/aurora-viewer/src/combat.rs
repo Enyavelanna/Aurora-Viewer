@@ -4,8 +4,10 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, time::Instant};
 use uuid::Uuid;
+pub(crate) mod allies;
 pub(crate) mod awards;
 pub(crate) mod export;
+pub(crate) mod feed;
 pub(crate) mod journal;
 pub(crate) mod navigation;
 pub(crate) mod ping_ui;
@@ -39,6 +41,21 @@ pub(crate) struct Settings {
     pub feed_opacity: f32,
     pub feed_seconds: f32,
     pub feed_entries: usize,
+    /// `feed::STYLE_COMPACT` (one line a kill) or `feed::STYLE_CARDS`.
+    pub feed_style: u8,
+    /// Whose kills are listed: `feed::FILTER_ALL`, `FILTER_MINE` or `FILTER_ALLIES`.
+    pub feed_filter: u8,
+    /// Leave out the deaths of objects and creatures.
+    pub feed_avatars_only: bool,
+    /// Your own kills and deaths are listed whatever the filter says.
+    pub feed_always_mine: bool,
+    /// Name the damage type of a kill instead of its number.
+    pub feed_damage: bool,
+    /// Moving the feed pulls it to the edges.
+    pub feed_snap: bool,
+    /// The feed shows made-up kills and can be dragged; never saved.
+    #[serde(skip)]
+    pub feed_test: bool,
     pub voices: bool,
     pub medals: bool,
     pub voice_volume: f32,
@@ -95,6 +112,13 @@ impl Default for Settings {
             feed_opacity: 0.9,
             feed_seconds: 6.0,
             feed_entries: 5,
+            feed_style: feed::STYLE_COMPACT,
+            feed_filter: feed::FILTER_ALL,
+            feed_avatars_only: false,
+            feed_always_mine: true,
+            feed_damage: true,
+            feed_snap: true,
+            feed_test: false,
             voices: false,
             medals: false,
             voice_volume: 0.7,

@@ -317,6 +317,8 @@ pub(crate) struct Nearby {
     pub distance: Option<f32>,
     /// Only the coarse location is known (no height).
     pub approximate: bool,
+    /// The group title on their name tag; unknown beyond the draw distance.
+    pub title: Option<String>,
 }
 
 /// The active group, and its members once their list has arrived.
@@ -336,12 +338,21 @@ pub(crate) struct Context {
     pub active_group: Option<ActiveGroup>,
     /// Names of the teammates, coloured residents and senders not around.
     pub names: BTreeMap<Uuid, String>,
+    /// Everyone who counts as an ally now (Allies tab).
+    pub allies: std::collections::BTreeSet<Uuid>,
+    /// The worn group is allied but its member list has not arrived.
+    pub allies_loading: bool,
 }
 impl Context {
     pub fn from_world(world: &World, cfg: &Settings) -> Self {
         let (x, y) = crate::ui::minimap::to_global(world, world.agent.position);
         let me = [x, y, world.agent.position.z as f64];
         let avatars = crate::ui::minimap::avatars(world);
+        let titles: BTreeMap<Uuid, String> = world
+            .objects
+            .avatars()
+            .filter_map(|(_, o)| o.group_title().map(|t| (o.full_id, t)))
+            .collect();
         let mut nearby: Vec<Nearby> = avatars
             .iter()
             .map(|(id, pos, known)| {
@@ -353,6 +364,7 @@ impl Context {
                     name: world.social.display_name_of(id),
                     distance: world.main_region.map(|_| distance as f32),
                     approximate: !known,
+                    title: titles.get(id).cloned(),
                 }
             })
             .collect();
@@ -390,6 +402,8 @@ impl Context {
             nearby,
             active_group,
             names,
+            allies: cfg.allies.resolve(world, &cfg.recipients),
+            allies_loading: cfg.allies.group_loading(world),
         }
     }
     /// A resident's name, around us or not.
@@ -531,6 +545,8 @@ pub(crate) struct Settings {
     pub share_group: bool,
     pub group_colors: BTreeMap<Uuid, [u8; 4]>,
     pub recipients: BTreeMap<Uuid, bool>,
+    /// The Allies tab: the teammates above, the worn group and group titles.
+    pub allies: super::allies::Allies,
     pub ping_sound: bool,
     pub sound_asset: String,
     pub sound_volume: f32,
@@ -611,6 +627,7 @@ impl Default for Settings {
             share_group: false,
             group_colors: BTreeMap::new(),
             recipients: BTreeMap::new(),
+            allies: Default::default(),
             ping_sound: false,
             sound_asset: String::new(),
             sound_volume: 0.7,

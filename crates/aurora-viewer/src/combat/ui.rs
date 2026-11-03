@@ -115,7 +115,9 @@ pub(crate) fn overlays(
     p: &Palette,
     world: &World,
     state: &mut State,
-    cfg: &Settings,
+    cfg: &mut Settings,
+    allies: &std::collections::BTreeSet<Uuid>,
+    ally_color: egui::Color32,
     images: &HashMap<Uuid, egui::TextureHandle>,
 ) {
     let now = Instant::now();
@@ -153,40 +155,28 @@ pub(crate) fn overlays(
             ctx.request_repaint();
         }
     }
-    if cfg.feed {
-        let position = egui::pos2(
-            rect.left() + rect.width() * cfg.feed_position[0].clamp(0.0, 1.0),
-            rect.top() + rect.height() * cfg.feed_position[1].clamp(0.0, 1.0),
-        );
-        let align = if cfg.feed_position[0] > 0.5 {
-            Align2::RIGHT_TOP
+    let mut edit = super::feed::Edit::default();
+    if cfg.feed || cfg.feed_test {
+        let entries = if cfg.feed_test {
+            super::feed::sample()
         } else {
-            Align2::LEFT_TOP
+            state
+                .feed
+                .iter()
+                .rev()
+                .filter(|r| now.saturating_duration_since(r.at).as_secs_f32() < cfg.feed_seconds.clamp(1.0, 30.0))
+                .filter(|r| super::feed::keep(cfg, &r.event, world.agent_id, allies))
+                .take(cfg.feed_entries.clamp(1, 20))
+                .map(|r| super::feed::entry(r, now, world, state.display.medals, allies))
+                .collect()
         };
-        let rows: Vec<_> = state
-            .feed
-            .iter()
-            .rev()
-            .filter(|r| now.saturating_duration_since(r.at).as_secs_f32() < cfg.feed_seconds.clamp(1.0, 30.0))
-            .take(cfg.feed_entries.clamp(1, 20))
-            .map(|r| line(r, world, &state.display))
-            .collect();
-        if !rows.is_empty() {
-            egui::Area::new(egui::Id::unique("combat-killfeed"))
-                .fixed_pos(position)
-                .pivot(align)
-                .order(egui::Order::Foreground)
-                .interactable(false)
-                .show(ctx, |ui| {
-                    ui.set_opacity(cfg.feed_opacity.clamp(0.0, 1.0));
-                    ui.set_max_width((rect.width() * 0.55).clamp(200.0, 720.0));
-                    crate::ui::widgets::overlay(ui, p, egui::Margin::same(6), |ui| {
-                        for text in rows {
-                            ui.add(egui::Label::new(egui::RichText::new(text).size(cfg.feed_size.clamp(9.0, 32.0))).truncate());
-                        }
-                    });
-                });
-        }
+        edit = super::feed::show(ctx, p, cfg, &entries, ally_color, rect);
+    }
+    if let Some(position) = edit.position {
+        cfg.feed_position = position;
+    }
+    if edit.done {
+        cfg.feed_test = false;
     }
     if let Some(view) = state.medal(cfg, now) {
         let (award, alpha, reveal) = (view.award, view.alpha, view.reveal);

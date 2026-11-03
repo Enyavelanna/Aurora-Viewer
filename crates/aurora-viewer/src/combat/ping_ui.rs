@@ -72,6 +72,7 @@ pub(crate) fn audience(cfg: &Settings) -> &'static str {
     match cfg.ping_audience {
         1 => tr!("tactical-selected"),
         2 => tr!("tactical-active-group"),
+        super::allies::AUDIENCE => tr!("tactical-allies"),
         _ => tr!("tactical-local"),
     }
 }

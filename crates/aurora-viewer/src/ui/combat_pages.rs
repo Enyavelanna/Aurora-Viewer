@@ -22,9 +22,13 @@ pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut Op
             3 => minimap(ui, p, s, st, &d),
             4 => marker_sets(ui, p, s, st),
             5 => pings(ui, p, s, st, &d),
-            _ => {
+            6 => {
                 let available = s.combat.enabled && s.maps.tactical.tools_enabled;
                 super::combat_sharing::show(ui, p, &mut s.maps.tactical, &st.tactical_context, available, &mut st.combat_sharing)
+            }
+            _ => {
+                let available = s.combat.enabled && s.maps.tactical.tools_enabled;
+                super::combat_allies::show(ui, p, &mut s.maps.tactical, &st.tactical_context, available, &mut st.combat_allies)
             }
         };
     });
@@ -165,31 +169,41 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                 **changed = true;
             }
             gap(ui);
-            let feed = (
-                c.feed,
-                c.feed_size,
-                c.feed_opacity,
-                c.feed_seconds,
-                c.feed_entries,
-                c.feed_position,
-                c.feed_medals,
-            );
-            let feed_default = (
-                dc.feed,
-                dc.feed_size,
-                dc.feed_opacity,
-                dc.feed_seconds,
-                dc.feed_entries,
-                dc.feed_position,
-                dc.feed_medals,
-            );
+            let feed = |c: &crate::combat::Settings| {
+                (
+                    (c.feed, c.feed_size, c.feed_opacity, c.feed_seconds, c.feed_entries),
+                    (c.feed_position, c.feed_medals, c.feed_style, c.feed_filter),
+                    (c.feed_avatars_only, c.feed_always_mine, c.feed_damage, c.feed_snap),
+                )
+            };
             if Card::new("list-details-filled", tr!("combat-feed"))
-                .modified(feed != feed_default)
+                .modified(feed(c) != feed(dc))
                 .show(ui, p, |ui| {
                     **changed |= switch_row(ui, p, &mut c.feed, tr!("combat-feed"), "");
+                    **changed |= switch_row(ui, p, &mut c.feed_test, tr!("combat-feed-test"), tr!("combat-feed-test-help"));
                     let on = c.feed;
                     **changed |= under(ui, on, |ui| {
-                        let mut any = switch_row(ui, p, &mut c.feed_medals, tr!("combat-feed-medals"), tr!("combat-feed-medals-help"));
+                        let mut style = usize::from(c.feed_style.min(crate::combat::feed::STYLE_CARDS));
+                        let styles = [(tr!("combat-feed-style-compact"), false), (tr!("combat-feed-style-cards"), false)];
+                        let mut any = field_row(ui, tr!("combat-feed-style"), "", |ui| {
+                            super::widgets::segmented(ui, p, &mut style, &styles)
+                        });
+                        c.feed_style = style as u8;
+                        let mut filter = usize::from(c.feed_filter.min(crate::combat::feed::FILTER_ALLIES));
+                        let filters = [
+                            (tr!("combat-feed-filter-all"), false),
+                            (tr!("combat-feed-filter-mine"), false),
+                            (tr!("combat-feed-filter-allies"), false),
+                        ];
+                        any |= field_row(ui, tr!("combat-feed-filter"), tr!("combat-feed-filter-help"), |ui| {
+                            super::widgets::segmented(ui, p, &mut filter, &filters)
+                        });
+                        c.feed_filter = filter as u8;
+                        any |= switch_row(ui, p, &mut c.feed_always_mine, tr!("combat-feed-always-mine"), "");
+                        any |= switch_row(ui, p, &mut c.feed_avatars_only, tr!("combat-feed-avatars-only"), "");
+                        any |= switch_row(ui, p, &mut c.feed_damage, tr!("combat-feed-damage"), tr!("combat-feed-damage-help"));
+                        any |= switch_row(ui, p, &mut c.feed_medals, tr!("combat-feed-medals"), tr!("combat-feed-medals-help"));
+                        any |= switch_row(ui, p, &mut c.feed_snap, tr!("combat-feed-snap"), "");
                         any |= slider_row(ui, tr!("combat-size"), "", &mut c.feed_size, 9.0..=32.0, "");
                         any |= slider_row(ui, tr!("combat-opacity"), "", &mut c.feed_opacity, 0.1..=1.0, "");
                         any |= slider_row(ui, tr!("combat-duration"), "", &mut c.feed_seconds, 1.0..=30.0, "");
@@ -199,15 +213,12 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                     });
                 })
             {
-                (
-                    c.feed,
-                    c.feed_size,
-                    c.feed_opacity,
-                    c.feed_seconds,
-                    c.feed_entries,
-                    c.feed_position,
-                    c.feed_medals,
-                ) = feed_default;
+                (c.feed, c.feed_size, c.feed_opacity, c.feed_seconds, c.feed_entries) =
+                    (dc.feed, dc.feed_size, dc.feed_opacity, dc.feed_seconds, dc.feed_entries);
+                (c.feed_position, c.feed_medals, c.feed_style, c.feed_filter) =
+                    (dc.feed_position, dc.feed_medals, dc.feed_style, dc.feed_filter);
+                (c.feed_avatars_only, c.feed_always_mine, c.feed_damage, c.feed_snap) =
+                    (dc.feed_avatars_only, dc.feed_always_mine, dc.feed_damage, dc.feed_snap);
                 **changed = true;
             }
         },

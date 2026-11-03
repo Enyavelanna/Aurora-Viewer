@@ -79,6 +79,7 @@ impl CombatWindow {
                             ("map-pin-filled", tr!("combat-page-sets")),
                             ("flag-filled", tr!("combat-page-pings")),
                             ("users-group", tr!("combat-page-sharing")),
+                            ("shield-filled", tr!("combat-page-allies")),
                         ]
                         .into_iter()
                         .enumerate()

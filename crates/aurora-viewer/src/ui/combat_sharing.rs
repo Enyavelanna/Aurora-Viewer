@@ -86,6 +86,7 @@ fn ping_reach(cfg: &Settings, context: &Context) -> Option<usize> {
     match cfg.ping_audience {
         1 => Some(teammate_ids(cfg).len()),
         2 => group_members(context).map(|m| m.len().saturating_sub(1)),
+        crate::combat::allies::AUDIENCE => (!context.allies_loading).then_some(context.allies.len()),
         _ => Some(0),
     }
 }
@@ -99,7 +100,7 @@ fn set_reach(cfg: &Settings, context: &Context) -> Option<usize> {
     Some(ids.len().saturating_sub(usize::from(cfg.share_group)))
 }
 
-fn title(ui: &mut egui::Ui, p: &Palette, icon: &str, text: &str, count: Option<usize>) {
+pub(super) fn title(ui: &mut egui::Ui, p: &Palette, icon: &str, text: &str, count: Option<usize>) {
     ui.horizontal(|ui| {
         if let Some(picture) = crate::ui::icons::global(icon) {
             ui.add(egui::Image::new((picture.id(), Vec2::splat(16.0))).tint(p.muted));
@@ -167,11 +168,12 @@ fn audience(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Contex
         title(ui, p, "share", tr!("tactical-ping-sharing"), None);
         ui.add_space(4.0);
         ui.add_enabled_ui(cfg.send_enabled, |ui| {
-            let mut selected = usize::from(cfg.ping_audience.min(2));
+            let mut selected = usize::from(cfg.ping_audience.min(crate::combat::allies::AUDIENCE));
             let choices = [
                 (tr!("tactical-local"), false),
                 (tr!("sharing-teammates"), false),
                 (tr!("tactical-active-group"), false),
+                (tr!("tactical-allies"), false),
             ];
             if widgets::segmented(ui, p, &mut selected, &choices) {
                 cfg.ping_audience = selected as u8;
@@ -189,7 +191,7 @@ fn audience(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Contex
 }
 
 /// Initials on a coloured tile, the colour picked from the resident's id.
-fn tile(ui: &mut egui::Ui, p: &Palette, id: Uuid, name: &str) {
+pub(super) fn tile(ui: &mut egui::Ui, p: &Palette, id: Uuid, name: &str) {
     let colors = [p.violet, p.teal, p.indigo, p.amber, p.rose];
     let color = colors[id.as_bytes()[0] as usize % colors.len()];
     let initials: String = name

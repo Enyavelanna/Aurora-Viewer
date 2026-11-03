@@ -8074,14 +8074,41 @@ impl App {
                     egui::vec2(760.0, 300.0),
                 );
                 self.chat_ui.combat_selected = true;
-                let workspace_demo =
-                    navigation_demo || std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "workspace" || value == "callouts");
+                let workspace_demo = navigation_demo
+                    || std::env::var("AURORA_DEMO_COMBAT")
+                        .is_ok_and(|value| matches!(value.as_str(), "workspace" | "callouts" | "allies" | "feed" | "feed-cards"));
                 self.settings.combat.journal = true;
                 self.settings.combat.killmarker = !workspace_demo;
                 self.settings.combat.medals = !workspace_demo;
                 self.settings.combat.feed = !workspace_demo;
                 self.settings.combat.feed_position = crate::combat::Settings::default().feed_position;
                 self.settings.maps.tactical.enabled = true;
+                if std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "allies") {
+                    // The demo avatars all wear the title "Aurora": that tag allies them,
+                    // and the nearest one is also ticked by name.
+                    self.settings.combat.enabled = true;
+                    self.settings.maps.tactical.tools_enabled = true;
+                    self.settings.maps.tactical.allies.add_tag("Aurora");
+                    let nearest = ui::minimap::avatars(&self.world).into_iter().next().map(|(id, ..)| id);
+                    if let Some(id) = nearest {
+                        self.settings.maps.tactical.recipients.insert(id, true);
+                    }
+                    self.panels.minimap = true;
+                }
+                if let Ok(value) = std::env::var("AURORA_DEMO_COMBAT")
+                    && matches!(value.as_str(), "feed" | "feed-cards")
+                {
+                    // The kill feed in its test mode, with its made-up kills.
+                    self.settings.combat.enabled = true;
+                    self.settings.combat.feed = true;
+                    self.settings.combat.feed_test = true;
+                    self.settings.combat.feed_position = [0.55, 0.22];
+                    self.settings.combat.feed_style = if value == "feed" {
+                        crate::combat::feed::STYLE_COMPACT
+                    } else {
+                        crate::combat::feed::STYLE_CARDS
+                    };
+                }
                 if std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "callouts") {
                     let (x, y) = ui::minimap::to_global(&self.world, self.world.agent.position);
                     self.settings.maps.tactical.markers =
@@ -14843,12 +14870,22 @@ impl App {
                     &mut self.settings.maps.tactical,
                     self.camera.mouselook(),
                 );
+                let tactical = &self.settings.maps.tactical;
+                let feed_allies = if self.settings.combat.feed && tactical.available() {
+                    tactical.allies.resolve(&self.world, &tactical.recipients)
+                } else {
+                    Default::default()
+                };
+                let [ar, ag, ab, aa] = tactical.allies.color;
                 crate::combat::ui::overlays(
                     &ctx,
                     &p,
                     &self.world,
                     &mut self.chat_ui.combat,
-                    &self.settings.combat,
+                    &mut self.settings.combat,
+                    &feed_allies,
+                    // theme-guard: content — the allies' colour the person picked.
+                    egui::Color32::from_rgba_unmultiplied(ar, ag, ab, aa),
                     &self.ui_images,
                 );
                 if let Some(press) = self.tactical_press
@@ -16835,7 +16872,7 @@ impl ApplicationHandler for App {
                     }
                     self.panels.settings = false;
                     self.panels.combat = !page.starts_with("/editor");
-                    self.combat_window.tab = page.strip_prefix('/').and_then(|s| s.parse::<usize>().ok()).unwrap_or(0).min(6);
+                    self.combat_window.tab = page.strip_prefix('/').and_then(|s| s.parse::<usize>().ok()).unwrap_or(0).min(7);
                 }
                 // the former Debug page: the Dev Toolbox
                 if value.split(':').next() == Some("9") {

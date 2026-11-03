@@ -124,11 +124,28 @@ impl App {
         if self.settings.maps.tactical.share_group || self.settings.maps.tactical.ping_audience == 2 {
             self.world.group_data.ensure_members(group);
         }
+        let allied_group = {
+            let t = &self.settings.maps.tactical;
+            t.available() && t.allies.enabled && t.allies.active_group && !group.is_nil()
+        };
+        if allied_group {
+            self.world.group_data.ensure_members(group);
+        }
         let group_members = if self.settings.maps.tactical.share_group || self.settings.maps.tactical.ping_audience == 2 {
             self.world.group_data.get(&group).filter(|g| g.members_complete)
         } else {
             None
         };
+        // Allies (Allies tab): ticked residents, the worn group and allied group titles.
+        let ally_ids = {
+            let t = &self.settings.maps.tactical;
+            if t.available() {
+                t.allies.resolve(&self.world, &t.recipients)
+            } else {
+                Default::default()
+            }
+        };
+        let allies_ready = !allied_group || self.world.group_data.get(&group).is_some_and(|g| g.members_complete);
         {
             use base64::{Engine, engine::general_purpose::STANDARD};
             let cfg = &mut self.settings.maps.tactical;
@@ -148,7 +165,10 @@ impl App {
                     continue;
                 }
                 let selected = cfg.recipients.get(&sender) == Some(&true) || group_members.is_some_and(|g| g.members.contains_key(&sender));
+                // An ally may send pings (not marker sets, which only the selected can).
+                let ally = ally_ids.contains(&sender);
                 if !selected
+                    && !ally
                     && !cfg
                         .pings
                         .iter()
@@ -172,7 +192,7 @@ impl App {
                             cfg.pings.iter().any(|p| p.sender == sender && p.marker.id == *id)
                         }
                     };
-                    if selected || participant {
+                    if selected || ally || participant {
                         cfg.accept_ping(sender, message, Instant::now());
                     }
                 } else if !selected {
@@ -188,6 +208,7 @@ impl App {
                 && cfg.send_enabled
                 && endpoint.is_some()
                 && (cfg.ping_audience != 2 || group_members.is_some())
+                && (cfg.ping_audience != crate::combat::allies::AUDIENCE || allies_ready)
             {
                 cfg.outgoing.drain(..cfg.outgoing.len().min(1)).collect()
             } else {
@@ -257,6 +278,12 @@ impl App {
                                     .filter(|_| if ping { cfg.ping_audience == 2 } else { cfg.share_group })
                                     .into_iter()
                                     .flat_map(|g| g.members.keys().copied()),
+                            )
+                            .chain(
+                                ally_ids
+                                    .iter()
+                                    .copied()
+                                    .filter(|_| ping && cfg.ping_audience == crate::combat::allies::AUDIENCE),
                             )
                             .filter(|id| *id != self.world.agent_id && !id.is_nil())
                             .collect();

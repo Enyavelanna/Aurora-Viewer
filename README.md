@@ -80,6 +80,11 @@ Mark contacts, objectives, and regroup points without leaving mouselook. The pin
 - **Off-screen indicators** for navigation.
 - **Mouselook support**.
 
+### Allies
+- **Allies tab** in the Combat window: tick the residents around you, ally the group you wear, or ally a group title you see over someone's head.
+- **Pings go to your allies** straight away, and you accept theirs.
+- **Own colour on the minimap** (configurable), with an optional ring.
+
 ### Tactical Mapping
 - **Combat Minimap** with persistent markers and direct editing.
 - **Region Marker Editor** with pins, circles, rectangles, polygons, arrows, routes, text and freehand tools.
