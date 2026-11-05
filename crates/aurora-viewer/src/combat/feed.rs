@@ -402,24 +402,27 @@ pub(crate) fn show(ctx: &egui::Context, p: &Palette, cfg: &Settings, entries: &[
                 let slid = if right { slide * SLIDE } else { -slide * SLIDE };
                 let at = if right { slot.right() - laid.size.x } else { slot.left() } + slid;
                 let row = Rect::from_min_size(egui::pos2(at, slot.top()), laid.size);
-                let painter = ui.painter().clone().with_clip_rect(ui.ctx().content_rect());
-                let fade = alpha * cfg.feed_opacity.clamp(0.0, 1.0);
+                let mut painter = ui.painter().clone().with_clip_rect(ui.ctx().content_rect());
+                // The whole row fades through the painter: a galley keeps the colours it was
+                // laid out with, so a faded colour passed to `galley` (its fallback, used for
+                // `Color32::PLACEHOLDER` only) would leave the text opaque.
+                painter.set_opacity(alpha * cfg.feed_opacity.clamp(0.0, 1.0));
                 // a dense base so the names read over a bright scene, the role's tint over it
-                painter.rect_filled(row, radius, p.panel.gamma_multiply(0.88 * fade));
-                painter.rect_filled(row, radius, look.back.gamma_multiply(fade));
+                painter.rect_filled(row, radius, p.panel.gamma_multiply(0.88));
+                painter.rect_filled(row, radius, look.back);
                 let bar = Rect::from_min_size(row.min, vec2(if cfg.feed_style == STYLE_CARDS { 4.0 } else { 3.0 }, row.height()));
-                painter.rect_filled(bar, radius, look.accent.gamma_multiply(fade));
+                painter.rect_filled(bar, radius, look.accent);
                 for (offset, galley) in laid.texts {
-                    painter.galley(row.min + offset.to_vec2(), galley, Color32::WHITE.gamma_multiply(fade));
+                    painter.galley(row.min + offset.to_vec2(), galley, p.ink);
                 }
                 for (at, icon, color, size) in laid.glyphs {
-                    crate::ui::widgets::paint_glyph(&painter, icon, row.min + at.to_vec2(), size, color.gamma_multiply(fade));
+                    crate::ui::widgets::paint_glyph(&painter, icon, row.min + at.to_vec2(), size, color);
                 }
                 for (r, galley, accent) in laid.chips {
                     let r = r.translate(row.min.to_vec2());
-                    painter.rect_filled(r, radius, p.raised.gamma_multiply(0.9 * fade));
-                    painter.rect_stroke(r, radius, Stroke::new(1.0, accent.gamma_multiply(fade)), StrokeKind::Inside);
-                    painter.galley(r.min + vec2(6.0, 2.0), galley, p.ink.gamma_multiply(fade));
+                    painter.rect_filled(r, radius, p.raised.gamma_multiply(0.9));
+                    painter.rect_stroke(r, radius, Stroke::new(1.0, accent), StrokeKind::Inside);
+                    painter.galley(r.min + vec2(6.0, 2.0), galley, p.ink);
                 }
             }
             let used = Rect::from_min_max(top, ui.min_rect().max);
