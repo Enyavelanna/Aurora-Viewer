@@ -33,6 +33,7 @@ mod attention;
 mod audio_mute;
 mod avatar_render_settings;
 mod bridge;
+mod busy_pause;
 mod movelock;
 mod particle_editor;
 mod portals;
@@ -60,6 +61,7 @@ mod describe;
 mod dev_toolbox;
 mod folders;
 mod map_export;
+mod texture_picker;
 use folders::chat_log_root;
 mod contents_drop_demo;
 mod contents_folder_drag_demo;
@@ -76,6 +78,7 @@ mod gestures;
 mod give_demo;
 mod gpu_recovery;
 mod gpu_stall;
+pub(crate) use gpu_stall::withdraw_all as withdraw_gpu_notices;
 mod graphics_start;
 mod grid_status;
 mod group_titles;
@@ -755,8 +758,16 @@ pub struct App {
     crash_swapchain: crash_state::SwapchainRecent,
     /// The state kept for the report once the GPU is lost.
     crash_kept: crash_state::KeptState,
+    /// GPU frame times and uploads of the last seconds, and the time since
+    /// the login and the last region change, for the same state.
+    crash_recent: crash_state::Recent,
+    crash_timeline: crash_state::Timeline,
+    /// The window is hidden behind others (`WindowEvent::Occluded`).
+    occluded: bool,
     /// The graphics card stopped finishing frames (app/gpu_stall.rs).
     gpu_stall: gpu_stall::GpuStall,
+    /// The 3D paused behind on a busy card (app/busy_pause.rs).
+    busy_pause: busy_pause::BusyPause,
     /// The other viewers on this PC (instances.rs).
     instances: crate::instances::Instances,
     /// The Down key's latch (FSCrouchToggle).
@@ -984,6 +995,12 @@ fn login_shortcut(screen: &Screen, action: Option<Action>) -> bool {
     matches!(screen, Screen::Login) && matches!(action, Some(Action::Preferences | Action::Quit))
 }
 
+/// A press winit made up from the keyboard state when the window gained the
+/// focus. Its synthetic releases stay: they only ever clear a held key.
+fn synthetic_press(is_synthetic: bool, state: ElementState) -> bool {
+    is_synthetic && state == ElementState::Pressed
+}
+
 /// A Ctrl / Alt shortcut of the viewer still works while a text field has
 /// the focus, as the Legacy Viewer's menu accelerators go before the focused
 /// field (LLViewerWindow::handleKey). The field keeps the exact editing
@@ -1146,6 +1163,11 @@ fn apply_test_overrides(settings: &mut Settings) {
     if let Ok(v) = std::env::var("AURORA_PROJECTOR_SHADOWS") {
         settings.projector_shadows = v != "0";
     }
+    if let Ok(value) = std::env::var("AURORA_PROJECTOR_SHADOW_LIMIT")
+        && let Ok(limit) = value.parse::<u8>()
+    {
+        settings.projector_shadow_limit = limit.clamp(1, aurora_render::projector_shadows::MAX_PROJECTOR_SHADOWS as u8);
+    }
     if let Ok(v) = std::env::var("AURORA_HDR") {
         settings.hdr_emissive = v != "0";
     }
@@ -1193,7 +1215,16 @@ impl App {
         media.set_pack_dir(plugin_pack.dir());
         let out_device = (!settings.audio.output_device.is_empty()).then(|| settings.audio.output_device.clone());
         let lib = Arc::new(AvatarLibrary::load());
-        let cache = crate::settings::cache_dir();
+        // the asset cache store: its key first (the credential store, read
+        // here rather than by the first streamer thread), then the folders
+        // of the earlier format go
+        aurora_net::objcache::seal_with(crate::cache::key().clone());
+        // (not the demo's: its folder is shared by the demo runs of every
+        // build, and holds nothing from the grid)
+        if std::env::var_os("AURORA_DEMO").is_none() {
+            crate::cache::remove_unsealed(crate::settings::cache_dir());
+        }
+        let cache = crate::settings::asset_cache_dir();
         let disk_cache = crate::cache::DiskCache::new(cache.clone(), settings.cache_size_mb);
         net.set_object_cache_dir(Some(cache.join("objects")));
         net.set_bandwidth(bandwidth_kbps(&settings));
@@ -1556,7 +1587,11 @@ impl App {
             crash_state_at: None,
             crash_swapchain: Default::default(),
             crash_kept: Default::default(),
+            crash_recent: Default::default(),
+            crash_timeline: Default::default(),
+            occluded: false,
             gpu_stall: Default::default(),
+            busy_pause: Default::default(),
             instances: crate::instances::Instances::new(),
             crouch_toggle: Default::default(),
             music_parcel_url: String::new(),
@@ -3821,6 +3856,7 @@ impl App {
             && !ctrl
             && !self.shift
             && !self.color_pipette()
+            && !self.texture_pipette()
             && !self.exit_prompt.open
             && !self.cursor_hold.held()
             && self.mouse_mode == MouseMode::None
@@ -6567,6 +6603,11 @@ impl App {
     /// Run by `click`; false also when it stopped to ask for the depth under
     /// the cursor (`ClickWait::waiting`), to run again when it has come.
     fn build_mouse_down(&mut self) -> bool {
+        if self.texture_pipette() {
+            self.left_down = true;
+            self.sample_texture();
+            return true;
+        }
         if self.ik_editor.open && !self.alt {
             if self.ik_editor.picking {
                 let Some(picked) = self.click_pick() else {
@@ -6831,6 +6872,12 @@ impl App {
             // after the press it ends, which still waits for its depth
             self.clicks.hold(click_pick::Held::LeftRelease);
             return;
+        }
+        if self.left_down && self.texture_pipette() {
+            if !self.egui_ctx.is_pointer_over_egui() {
+                self.sample_texture();
+            }
+            ui::texture_picker::pipette::release(&self.egui_ctx);
         }
         if self.left_down && self.color_pipette() {
             if !self.egui_ctx.is_pointer_over_egui() {
@@ -8280,6 +8327,11 @@ impl App {
         if self.demo {
             self.demo_uri_restore();
         }
+        if self.demo && crate::demo::projector_bench_done() {
+            log::info!("projector benchmark end");
+            self.shutdown(event_loop);
+            return;
+        }
         if self.demo && self.frame_count == 650 && std::env::var_os("AURORA_DEMO_EXIT").is_some() {
             self.request_exit();
         }
@@ -8978,6 +9030,9 @@ impl App {
 
         self.frame_profile.lap(Lap::Social);
         // Coalesce OS pointer moves before taking the renderer for this frame.
+        if self.left_down && self.texture_pipette() && !self.egui_ctx.is_pointer_over_egui() {
+            self.sample_texture();
+        }
         if self.left_down && self.color_pipette() && !self.egui_ctx.is_pointer_over_egui() {
             self.sample_build_color();
         }
@@ -9112,6 +9167,13 @@ impl App {
                 late_camera_frame = Some(frame);
             } else {
                 self.camera.update(&mut self.world, &self.settings.camera, &frame);
+            }
+            if self.demo
+                && let Some((eye, target)) = crate::demo::projector_camera(self.frame_count)
+            {
+                self.camera.position = eye;
+                self.camera.target = target;
+                self.interface.set_hidden(&self.egui_ctx, true);
             }
             let at = self.camera.forward();
             let step_back = self.settings.walk_backwards_without_turning;
@@ -9633,11 +9695,17 @@ impl App {
             // Use face coverage while highlighting local appearances. Actual
             // build selection, wire outlines and edits stay untouched; its
             // ordinary face overlay returns when the mode is switched off.
-            let selected_faces = if self.imports.local_status.revealing() {
+            let mut selected_faces = if self.imports.local_status.revealing() {
                 self.imports.appearance_status(&self.world.objects).faces
             } else {
                 self.build.face_selection(&self.world, &self.settings.build)
             };
+            if let Some((object, face)) = ui::texture_picker::pipette::highlighted(&self.egui_ctx)
+                && face < 64
+                && let Some(idx) = self.world.objects.index_of_uuid(&object)
+            {
+                *selected_faces.entry(idx).or_default() |= 1u64 << face;
+            }
             self.scene.set_face_selection(&mut self.world, selected_faces);
             if std::mem::take(&mut self.build.ui.reveal_faces) {
                 self.scene.reveal_selected_faces();
@@ -9986,7 +10054,7 @@ impl App {
             // offline demo teleport: the real steps, landing where we were
             let e = t0.elapsed().as_secs_f32();
             let w = &mut self.world;
-            if e >= 3.2 {
+            if e >= 3.2 && !crate::demo::tp_no_arrival() {
                 self.demo_tp_start = None;
                 w.tp_progress = 0.6;
                 w.tp_status = aurora_i18n::tr!("common-loading-region").into();
@@ -10039,6 +10107,22 @@ impl App {
                 self.tp_dest = None;
             }
         }
+        // no answer from the region: stop waiting, without ending the session
+        if self.world.arrival_overdue(Instant::now(), self.scene.own_attachment_count()) {
+            let kind = if self.world.teleporting {
+                aurora_net::transition::Kind::Teleport
+            } else {
+                aurora_net::transition::Kind::Crossing
+            };
+            aurora_net::transition::end(
+                Some(kind),
+                "failed (the region did not confirm the arrival in time)",
+                &self.net.stats,
+            );
+            self.demo_tp_start = None;
+            self.world.give_up_arrival();
+            self.net.send(NetCommand::ArrivalGivenUp);
+        }
         let tp = self.world.teleporting && self.world.tp_show_progress && matches!(self.screen, Screen::World);
         if tp && !self.was_teleporting {
             // keep the view we are leaving for the teleport screen
@@ -10079,15 +10163,6 @@ impl App {
                         teleport_screen::Mode::Quick => "arrived (teleport screen hidden)",
                         teleport_screen::Mode::Old => "arrived (teleport screen hidden, old screen)",
                     },
-                    &self.net.stats,
-                );
-            }
-            // no answer from the simulator: give up the screen
-            if o.arrived.is_none() && o.start.elapsed() > Duration::from_secs(90) && o.end.is_none() {
-                o.end = Some(Instant::now());
-                aurora_net::transition::end(
-                    Some(aurora_net::transition::Kind::Teleport),
-                    "failed (no arrival 90 s after the teleport screen was shown)",
                     &self.net.stats,
                 );
             }
@@ -10213,10 +10288,15 @@ impl App {
                 range: self.settings.draw_distance,
                 dt,
                 projector_shadows: self.settings.projector_shadows && self.settings.shadow_quality > 0,
+                projector_shadow_limit: aurora_render::projector_shadows::effective_limit(
+                    self.settings.shadow_params().0,
+                    self.settings.projector_shadow_limit,
+                    gfx.renderer.max_texture_dimension(),
+                ),
             };
             self.scene.local_lights(&self.world, &mut gfx.renderer, &view)
         } else {
-            (Vec::new(), [None; 2])
+            (Vec::new(), [None; aurora_render::projector_shadows::MAX_PROJECTOR_SHADOWS])
         };
         t_part = self.scene.parts.lap(Part::ParamsLights, t_part);
         let probes = if in_world {
@@ -10236,9 +10316,10 @@ impl App {
             aurora_render::ProbeFrame::default()
         };
         let mut fp = FrameParams {
-            // (a window behind past the driver's budget pauses its 3D
-            // drawing: its 3D targets shrink, texture_budget::Background)
-            rlva_resolution_divisor: if self.scene.textures.drawing_paused() {
+            // (a window behind past the driver's budget, or on a card another
+            // program keeps busy, pauses its 3D drawing: its 3D targets
+            // shrink, texture_budget::Background, busy_pause.rs)
+            rlva_resolution_divisor: if self.drawing_paused() {
                 PAUSED_RESOLUTION_DIVISOR
             } else {
                 self.world.rlva.resolution_divisor.unwrap_or(1)
@@ -10849,9 +10930,15 @@ impl App {
             full.platform_output.cursor_icon = cursor;
             full.platform_output.cursor_image = self.cursors.inventory_drag(cursor);
         }
-        if (self.color_pipette() || self.report_abuse.picking || self.particle_editor.picking) && !ctx.is_pointer_over_egui() {
+        if (self.color_pipette() || self.texture_pipette() || self.report_abuse.picking || self.particle_editor.picking)
+            && !ctx.is_pointer_over_egui()
+        {
             full.platform_output.cursor_icon = egui::CursorIcon::Crosshair;
             full.platform_output.cursor_image = self.cursors.pipette();
+            if ui::texture_picker::pipette::failed(&ctx) {
+                full.platform_output.cursor_icon = egui::CursorIcon::NotAllowed;
+                full.platform_output.cursor_image = None;
+            }
         }
         if self.cursor_hold.held() {
             // the camera holds the hidden cursor: a cursor change from egui
@@ -11064,8 +11151,8 @@ impl App {
         // returned are those of the frame before; a frame that carries a
         // capture is waited for, its pixels are read in the tail below.
         // (nothing of the scene while the 3D drawing is paused behind,
-        // texture_budget::Background)
-        let lists = if self.in_world() && !self.scene.textures.drawing_paused() {
+        // texture_budget::Background, busy_pause.rs)
+        let lists = if self.in_world() && !self.drawing_paused() {
             &self.scene.lists
         } else {
             &self.empty_lists
@@ -11078,6 +11165,7 @@ impl App {
         self.photo_gpu_time(&stats);
         self.photo_drawn(&mut gfx.renderer);
         self.last_render = stats;
+        self.busy_pause_frame(gfx.renderer.vr_engaged());
         if stats.presented && !gfx.shown {
             gfx.shown = true;
             // On Windows, maximizing can show even a hidden window. Defer
@@ -11689,6 +11777,8 @@ impl App {
             .frame(paced.as_secs_f32().min(0.1) * 1000.0, net, &self.last_render, &self.scene.stats);
         self.frame_profile.lap(Lap::Tail);
         self.end_profile_frame(w, h);
+        // before the deep profile, which takes the frame's upload bytes
+        self.crash_frame();
         self.end_deep_profile(&gfx.renderer);
         self.monitor_frame(&gfx.renderer);
         self.crash_state(&gfx.renderer, &gfx.window);
@@ -12466,14 +12556,14 @@ impl App {
                         self.build.ui.pick_target =
                             Some(channel.map_or(crate::build::ui::PickTarget::Diffuse, crate::build::ui::PickTarget::PbrMap));
                     }
-                    crate::build::demo::Step::TexturePicker(materials, local) => {
+                    crate::build::demo::Step::TexturePicker(target, local) => {
                         let current = self
                             .build
                             .sel_te(&self.world)
                             .first()
                             .and_then(|&(idx, face)| self.world.objects.get(idx)?.te.as_ref().map(|te| te.face(face as usize).texture))
                             .unwrap_or_default();
-                        if materials {
+                        if target == crate::build::ui::PickTarget::PbrMaterial {
                             self.build.ui.picker.open_materials(
                                 aurora_i18n::tr!("build-ui-texture-choose-material"),
                                 crate::demo::pbr_materials().first().map(|(id, _)| *id).unwrap_or_default(),
@@ -12487,10 +12577,42 @@ impl App {
                                 Some(aurora_prim::te::DEFAULT_TEXTURE),
                                 false,
                             );
-                            self.build.ui.pick_target = Some(crate::build::ui::PickTarget::Diffuse);
+                            self.build.ui.pick_target = Some(target);
                         }
                         if local {
                             self.build.ui.picker.show_local_tab();
+                        }
+                        if std::env::var("AURORA_DEMO_BUILD").is_ok_and(|mode| mode.contains("-badges-")) {
+                            use crate::world::objects::{LocalAppearance, LocalTextureSlot};
+                            let material = target == crate::build::ui::PickTarget::PbrMaterial;
+                            if let Some(id) = self
+                                .world
+                                .local_assets
+                                .iter()
+                                .filter(|(_, (_, is_material))| *is_material == material)
+                                .map(|(id, _)| *id)
+                                .min()
+                            {
+                                for (idx, face) in self.build.sel_te(&self.world) {
+                                    if let Some(object) = self.world.objects.get_mut(idx) {
+                                        let value = if material {
+                                            Some(LocalAppearance::Material(id))
+                                        } else {
+                                            LocalAppearance::with_texture(
+                                                Some(LocalAppearance::Texture(id)),
+                                                LocalTextureSlot::Normal,
+                                                Some(id),
+                                            )
+                                        };
+                                        if let Some(value) = value {
+                                            object.render.local_appearance.insert(Some(face), value);
+                                        }
+                                        object.material_dirty = true;
+                                        object.render.needs_records = true;
+                                    }
+                                }
+                                self.build.ui.picker.follow(id);
+                            }
                         }
                         self.imports.open = false;
                         crate::build::demo::texture_inventory(&mut self.world);
@@ -12825,6 +12947,7 @@ impl App {
             anchored: if in_world { st.anchored } else { 0 },
             flexies: if in_world { st.flexies } else { 0 },
             flexies_held: if in_world { st.flexies_held } else { 0 },
+            movers: if in_world { st.movers } else { 0 },
         };
         let mut parts = std::mem::take(&mut self.scene.parts);
         parts.merge(&std::mem::take(&mut self.ui_parts));
@@ -12846,9 +12969,19 @@ impl App {
             if let Some(old) = crate::scene::flexible::alternate(self.sync_alt) {
                 self.frame_profile.set_mark(if old { " | xmode=old" } else { " | xmode=new" });
             }
+            // AURORA_MOVING_ANCHORS=alt: what moves by itself placed by the
+            // sync one second in three
+            if let Some(old) = crate::scene::anchors::alternate_movers(self.sync_alt) {
+                self.frame_profile.set_mark(if old { " | xmode=old" } else { " | xmode=new" });
+            }
             // AURORA_IMPOSTOR_POSES=alt: impostors posed at every frame in the
             // same seconds
             if let Some(old) = crate::scene::impostors::alternate_poses(self.sync_alt) {
+                self.frame_profile.set_mark(if old { " | xmode=old" } else { " | xmode=new" });
+            }
+            // AURORA_WRITE_STAGING=alt: the journal's buffer writes through
+            // the queue one second in three
+            if let Some(old) = aurora_render::write_staging::alternate(self.sync_alt) {
                 self.frame_profile.set_mark(if old { " | xmode=old" } else { " | xmode=new" });
             }
             // AURORA_PROBE_WALK=alt: the whole probe list walked one second in three
@@ -14612,6 +14745,17 @@ impl App {
         let p = self.palette;
         let ctx = ui.ctx().clone();
         ui::inventory::view::set_picker_sort(&ctx, self.settings.inventory.sort);
+        ui::widgets::local_texture::sync(
+            &ctx,
+            self.world.local_assets.keys().copied().chain(
+                self.imports
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.local)
+                    .flat_map(|entry| entry.local_slots.keys().copied()),
+            ),
+            &self.ui_images,
+        );
         ui::widgets::set_perceptual_volume(&ctx, self.settings.audio.perceptual_volume);
         ui::bars::clock::set_chat_format(self.system_island().clock_format);
         let beacon_hovered = !ctx.is_pointer_over_egui() && !ctx.egui_wants_pointer_input() && self.beacon_hover();
@@ -14633,6 +14777,7 @@ impl App {
         if !matches!(self.screen, Screen::World) && self.interface.hidden {
             self.interface.set_hidden(&ctx, false);
         }
+        self.busy_pause_notice(&ctx, &p);
         match self.screen {
             Screen::Login => {
                 if let Some(demo) = &mut self.update_demo {
@@ -19993,6 +20138,17 @@ impl ApplicationHandler for App {
         if self.retired_window.as_ref().is_some_and(|w| w.id() == id) && !matches!(event, WindowEvent::CloseRequested) {
             return;
         }
+        // The system's view of the keys when the focus comes back is no key
+        // press: a key it wrongly reports as down (#2287) would stay held
+        // here, with no release to come. Like egui-winit, and like
+        // LLKeyboard::handleTranslatedKeyDown, fed by real key-down messages.
+        if let WindowEvent::KeyboardInput {
+            event: ke, is_synthetic, ..
+        } = &event
+            && synthetic_press(*is_synthetic, ke.state)
+        {
+            return;
+        }
         // VR exit owns Escape before egui, pickers, chat or camera shortcuts.
         if self.gfx.as_ref().is_some_and(|g| g.renderer.vr_engaged())
             && let WindowEvent::KeyboardInput { event: key, .. } = &event
@@ -20121,6 +20277,9 @@ impl ApplicationHandler for App {
                     self.build.reset_selection_wheel();
                 }
             }
+            WindowEvent::Occluded(hidden) => {
+                self.occluded = *hidden;
+            }
             WindowEvent::Focused(true) => {
                 self.focused = true;
                 if !self.demo
@@ -20201,6 +20360,7 @@ impl ApplicationHandler for App {
                         && (self.build.ui.color_picker.is_open()
                             || self.script_editors.color_open()
                             || eyedropper
+                            || self.texture_pipette()
                             || self.chat_ui.previews.enlarged()
                             || self.chat_ui.previews.image_window_open()
                             || ui::emoji::picker_open(&self.egui_ctx))
@@ -20509,6 +20669,11 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 self.last_input = Instant::now();
+                // (AURORA_DEMO_BUSY_PAUSE: a click ends the demo's busy card,
+                // as the focus does a real one; busy_pause.rs)
+                if *state == ElementState::Pressed && self.busy_pause.paused() {
+                    self.busy_pause.demo_released = true;
+                }
                 if *state == ElementState::Pressed
                     && self
                         .tactical_press
@@ -20741,6 +20906,17 @@ mod tests {
     use super::{RightGesture, UiActions, capture_files, frame_cap};
     use crate::settings::Settings;
     use std::path::{Path, PathBuf};
+
+    /// #2287: only the made-up press is dropped; real keys and every release
+    /// still go through, so a held key can always be let go.
+    #[test]
+    fn only_a_synthetic_press_is_ignored() {
+        use winit::event::ElementState::{Pressed, Released};
+        assert!(super::synthetic_press(true, Pressed));
+        assert!(!super::synthetic_press(true, Released));
+        assert!(!super::synthetic_press(false, Pressed));
+        assert!(!super::synthetic_press(false, Released));
+    }
 
     #[test]
     fn automatic_flight_hold_restarts_after_release_or_disabling_the_preference() {
