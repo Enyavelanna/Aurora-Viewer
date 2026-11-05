@@ -2889,19 +2889,8 @@ impl App {
         self.minimap_ui = Default::default();
         self.people_map_ui = Default::default();
         self.bridge_runtime.clear_combat();
-        self.settings.maps.tactical.last_ping = None;
-        self.settings.maps.tactical.sender_pings.clear();
-        self.settings.maps.tactical.seen_messages.clear();
-        self.settings.maps.tactical.ping_controls.clear();
-        self.settings.maps.tactical.cancelled_pings.clear();
-        self.settings.maps.tactical.pending_contacts.clear();
-        self.settings.maps.tactical.last_tap = None;
-        self.settings.maps.tactical.aimed_ping = None;
-        self.settings.maps.tactical.draw = None;
-        self.settings.maps.tactical.drawing_start = None;
+        self.settings.maps.tactical.reset_session();
         self.tactical_press = None;
-        self.settings.maps.tactical.pings.clear();
-        self.settings.maps.tactical.outgoing.clear();
         // the next session's network starts with the neighbours allowed
         self.neighbours_refused = false;
         // the transcripts shown belong to the account that leaves
@@ -8515,23 +8504,12 @@ impl App {
             self.chat_ui.combat.preview_medal = None;
         }
         if !self.settings.maps.tactical.available() {
-            self.settings.maps.tactical.cancel_gesture();
-            self.settings.maps.tactical.editing = false;
-            self.settings.maps.tactical.capture_key = false;
+            self.settings.maps.tactical.stop_tools();
             self.tactical_press = None;
-            self.settings.maps.tactical.draw = None;
-            self.settings.maps.tactical.drawing_start = None;
-            self.settings.maps.tactical.pings.clear();
-            self.settings.maps.tactical.ping_controls.clear();
-            self.settings.maps.tactical.aimed_ping = None;
-            self.settings.maps.tactical.outgoing.clear();
-            self.settings.maps.tactical.set_outgoing.clear();
-            self.settings.maps.tactical.inbox = Default::default();
-            self.settings.maps.tactical.sound_pending = false;
         }
         if !self.settings.maps.tactical.pings_enabled {
             self.tactical_press = None;
-            self.settings.maps.tactical.aimed_ping = None;
+            self.settings.maps.tactical.session.aimed_ping = None;
         }
         if self.tactical_press.is_some_and(|press| press.region != self.world.main_region) {
             self.tactical_press = None;
@@ -8615,7 +8593,7 @@ impl App {
                     let (x, y) = ui::minimap::to_global(&self.world, self.world.agent.position);
                     self.settings.maps.tactical.markers =
                         crate::combat::tactical::demo_callouts([x, y], self.world.agent.position.z as f64);
-                    self.settings.maps.tactical.editing = true;
+                    self.settings.maps.tactical.session.editing = true;
                 }
                 self.settings.maps.tactical.pings_enabled = navigation_demo || !workspace_demo;
                 if navigation_demo {
@@ -8623,12 +8601,12 @@ impl App {
                     self.settings.maps.tactical.tools_enabled = true;
                     self.settings.maps.tactical.offscreen_pings = true;
                     self.panels.minimap = false;
-                    self.settings.maps.tactical.pings.clear();
+                    self.settings.maps.tactical.session.pings.clear();
                     for (n, (dx, dy, kind)) in [(45.0, 0.0, 1), (46.0, 1.0, 3), (-45.0, 0.0, 2), (0.0, 45.0, 0), (0.0, -45.0, 3)]
                         .into_iter()
                         .enumerate()
                     {
-                        self.settings.maps.tactical.pings.push(crate::combat::tactical::Ping::new(
+                        self.settings.maps.tactical.session.pings.push(crate::combat::tactical::Ping::new(
                             crate::combat::tactical::Marker {
                                 id: uuid::Uuid::new_v4(),
                                 name: crate::combat::tactical::kind_name(kind).into(),
@@ -8679,7 +8657,7 @@ impl App {
                 let mika = uuid::Uuid::from_u128(0xc202);
                 self.world.social.names.insert(alex, "Alex Rivers".into());
                 self.world.social.names.insert(mika, "Mika Stone".into());
-                cfg.pings.clear();
+                cfg.session.pings.clear();
                 let forward = self.camera.forward();
                 let right = forward.cross(Vec3::Z).normalize_or(Vec3::Y);
                 let (ox, oy) = self.world.main_origin().unwrap_or_default();
@@ -8701,12 +8679,12 @@ impl App {
                         ping.responders.insert(alex);
                         ping.sharing = crate::combat::pings::ShareState::Attempted;
                     }
-                    cfg.pings.push(ping);
+                    cfg.session.pings.push(ping);
                 }
                 if std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "ping-wheel") {
                     self.tactical_press = Some(crate::combat::ping_ui::Press {
                         since: Instant::now() - Duration::from_secs(1),
-                        point: cfg.pings.last().map(|p| p.marker.position),
+                        point: cfg.session.pings.last().map(|p| p.marker.position),
                         center: self.egui_ctx.content_rect().center(),
                         target: None,
                         upgrade: None,
@@ -8725,7 +8703,7 @@ impl App {
                 }
                 if (self.frame_count - 600).is_multiple_of(240) {
                     let (x, y) = ui::minimap::to_global(&self.world, self.world.agent.position);
-                    self.settings.maps.tactical.pings.clear();
+                    self.settings.maps.tactical.session.pings.clear();
                     self.settings.maps.tactical.ping(
                         [x + 8.0, y + 5.0, self.world.agent.position.z as f64],
                         ((self.frame_count - 600) / 240) as usize % 4,
@@ -15741,7 +15719,7 @@ impl App {
                         }
                     }
                     crate::combat::ping_ui::wheel(&ctx, &p, &self.settings.maps.tactical, press.center, press.point.is_some());
-                } else if let Some(id) = self.settings.maps.tactical.aimed_ping {
+                } else if let Some(id) = self.settings.maps.tactical.session.aimed_ping {
                     let at = if self.camera.mouselook() {
                         ctx.content_rect().center()
                     } else {
@@ -20163,12 +20141,12 @@ impl ApplicationHandler for App {
             return;
         }
 
-        if self.settings.maps.tactical.draw.is_some()
+        if self.settings.maps.tactical.session.draw.is_some()
             && matches!(&event,WindowEvent::KeyboardInput {event:ke,..}
                 if ke.state==ElementState::Pressed && ke.physical_key==PhysicalKey::Code(winit::keyboard::KeyCode::Escape))
         {
-            self.settings.maps.tactical.draw = None;
-            self.settings.maps.tactical.drawing_start = None;
+            self.settings.maps.tactical.session.draw = None;
+            self.settings.maps.tactical.session.drawing_start = None;
             return;
         }
         // the digits of a Windows Alt code typed in a text field are kept
@@ -20447,8 +20425,8 @@ impl ApplicationHandler for App {
                     }
                     // Releases always go through so keys never get stuck.
                     let typing = self.egui_ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(&self.egui_ctx);
-                    if self.settings.maps.tactical.capture_key && pressed && !ke.repeat && !Input::is_modifier(code) {
-                        self.settings.maps.tactical.capture_key = false;
+                    if self.settings.maps.tactical.session.capture_key && pressed && !ke.repeat && !Input::is_modifier(code) {
+                        self.settings.maps.tactical.session.capture_key = false;
                         if code != winit::keyboard::KeyCode::Escape {
                             self.settings.maps.tactical.key = format!("{code:?}");
                         }
@@ -20472,7 +20450,7 @@ impl ApplicationHandler for App {
                                 let ray = g.renderer.cursor_ray(pixel.0, pixel.1)?;
                                 self.scene.tactical_pick(&self.world, ray, self.settings.draw_distance)
                             });
-                            let target = self.settings.maps.tactical.aimed_ping;
+                            let target = self.settings.maps.tactical.session.aimed_ping;
                             let upgrade = self
                                 .settings
                                 .maps

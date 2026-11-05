@@ -691,7 +691,7 @@ fn combat_preferences_are_hidden_and_reset_without_erasing_annotations() {
     s.maps.tactical.add_marker([100.0, 200.0, 30.0]);
     s.maps.tactical.ping([101.0, 201.0, 30.0], 1);
     let markers = s.maps.tactical.markers.clone();
-    let pings = s.maps.tactical.pings.clone();
+    let pings = s.maps.tactical.session.pings.clone();
     let combat = s.combat.clone();
     for page in Page::ALL {
         reset_page_settings(page, &mut s);
@@ -699,7 +699,7 @@ fn combat_preferences_are_hidden_and_reset_without_erasing_annotations() {
     assert_eq!(s.combat, combat, "Combat settings are not reset by any Preferences page");
     assert!(s.maps.tactical.enabled && s.maps.tactical.pings_enabled);
     assert_eq!(s.maps.tactical.markers, markers);
-    assert_eq!(s.maps.tactical.pings, pings);
+    assert_eq!(s.maps.tactical.session.pings, pings);
 }
 
 #[test]

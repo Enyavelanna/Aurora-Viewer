@@ -77,7 +77,7 @@ fn combat_two_click_shapes_claim_double_clicks_and_escape_preserves_existing_mar
         ..Default::default()
     };
     opts.tactical.enabled = true;
-    opts.tactical.draw = Some(Shape::Square);
+    opts.tactical.session.draw = Some(Shape::Square);
     draw(&mut frames, &mut map, &world, &mut tiles, &camera, &mut opts, vec![]);
     for point in [pos2(80.0, 80.0), pos2(150.0, 120.0)] {
         for pressed in [true, false] {
@@ -90,7 +90,7 @@ fn combat_two_click_shapes_claim_double_clicks_and_escape_preserves_existing_mar
     let end = marker.end.expect("square end");
     assert_eq!((end[0] - marker.position[0]).abs(), (end[1] - marker.position[1]).abs());
     let original = marker.clone();
-    opts.tactical.editing = true;
+    opts.tactical.session.editing = true;
     draw(
         &mut frames,
         &mut map,
@@ -139,8 +139,8 @@ fn combat_two_click_shapes_claim_double_clicks_and_escape_preserves_existing_mar
         &mut opts,
         click(pos2(110.0, 110.0), false),
     );
-    opts.tactical.draw = Some(Shape::Line);
-    opts.tactical.drawing_start = Some([1.0, 2.0, 3.0]);
+    opts.tactical.session.draw = Some(Shape::Line);
+    opts.tactical.session.drawing_start = Some([1.0, 2.0, 3.0]);
     draw(
         &mut frames,
         &mut map,
@@ -156,6 +156,6 @@ fn combat_two_click_shapes_claim_double_clicks_and_escape_preserves_existing_mar
             modifiers: egui::Modifiers::NONE,
         }],
     );
-    assert!(opts.tactical.draw.is_none() && opts.tactical.drawing_start.is_none());
+    assert!(opts.tactical.session.draw.is_none() && opts.tactical.session.drawing_start.is_none());
     assert_eq!(opts.tactical.markers.len(), 1);
 }

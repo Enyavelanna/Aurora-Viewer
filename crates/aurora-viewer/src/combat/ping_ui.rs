@@ -88,11 +88,11 @@ pub(crate) fn sharing(state: ShareState) -> &'static str {
 
 pub(crate) fn active(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, identities: &std::collections::BTreeMap<Uuid, String>) {
     widgets::collapsing(ui, p, "active-pings", tr!("ping-active"), true, |ui| {
-        if cfg.pings.is_empty() {
+        if cfg.session.pings.is_empty() {
             ui.label(tr!("ping-none"));
         }
         let mut respond = None;
-        for ping in &cfg.pings {
+        for ping in &cfg.session.pings {
             ui.push_id(ping.marker.id, |ui| {
                 widgets::surface(ui, p, |ui| {
                     let name = if ping.own() {
@@ -252,7 +252,7 @@ pub(crate) fn wheel(ctx: &egui::Context, p: &Palette, cfg: &Settings, center: Po
 }
 
 pub(crate) fn target_hint(ctx: &egui::Context, p: &Palette, cfg: &Settings, id: Uuid, at: Pos2) {
-    let Some(ping) = cfg.pings.iter().find(|ping| ping.marker.id == id) else {
+    let Some(ping) = cfg.session.pings.iter().find(|ping| ping.marker.id == id) else {
         return;
     };
     let text = if ping.own() {

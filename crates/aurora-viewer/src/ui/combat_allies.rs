@@ -46,51 +46,56 @@ fn declared(cfg: &Settings) -> bool {
 
 /// True when a setting changed.
 pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context, available: bool, view: &mut View) -> bool {
-    let before = cfg.clone();
+    // Each card says whether it changed a setting.
+    let mut changed = false;
+    let declared_before = declared(cfg);
     if !available {
         notice(ui, p, tr!("allies-unavailable"));
         ui.add_space(8.0);
     }
     ui.add_enabled_ui(available, |ui| {
-        header(ui, p, cfg, context);
+        changed |= header(ui, p, cfg, context);
         ui.add_space(10.0);
         ui.add_enabled_ui(cfg.allies.enabled, |ui| {
-            pings_card(ui, p, cfg);
+            changed |= pings_card(ui, p, cfg);
             ui.add_space(10.0);
             if ui.available_width() >= 760.0 {
                 ui.columns(2, |columns| {
-                    residents(&mut columns[0], p, cfg, context, view);
+                    changed |= residents(&mut columns[0], p, cfg, context, view);
                     columns[1].vertical(|ui| {
-                        groups(ui, p, cfg, context);
+                        changed |= groups(ui, p, cfg, context);
                         ui.add_space(10.0);
-                        minimap(ui, p, cfg);
+                        changed |= minimap(ui, p, cfg);
                     });
                 });
             } else {
-                residents(ui, p, cfg, context, view);
+                changed |= residents(ui, p, cfg, context, view);
                 ui.add_space(10.0);
-                groups(ui, p, cfg, context);
+                changed |= groups(ui, p, cfg, context);
                 ui.add_space(10.0);
-                minimap(ui, p, cfg);
+                changed |= minimap(ui, p, cfg);
             }
         });
     });
     // The first ally turns the sharing of pings on, so that it is shared at once;
     // an audience the person chose on purpose (the active group) is left alone.
-    if !declared(&before) && declared(cfg) && cfg.allies.enabled {
+    if !declared_before && declared(cfg) && cfg.allies.enabled {
         cfg.share = true;
         if cfg.ping_audience <= 1 {
             cfg.ping_audience = allies::AUDIENCE;
         }
+        changed = true;
     }
-    *cfg != before
+    changed
 }
 
-fn header(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) {
+/// True when the allies switch flipped.
+fn header(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) -> bool {
+    let mut changed = false;
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            widgets::switch(ui, p, &mut cfg.allies.enabled);
+            changed |= widgets::switch(ui, p, &mut cfg.allies.enabled).changed();
             ui.label(RichText::new(tr!("allies-title")).strong().size(15.0).color(p.ink));
             if cfg.allies.enabled {
                 badge(ui, p, &context.allies.len().to_string(), p.violet);
@@ -102,9 +107,12 @@ fn header(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context)
             muted(ui, p, tr!("sharing-group-loading"));
         }
     });
+    changed
 }
 
-fn pings_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
+/// True when the ping sharing switch flipped.
+fn pings_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) -> bool {
+    let mut changed = false;
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
         title(ui, p, "share", tr!("allies-pings"), None);
@@ -118,12 +126,14 @@ fn pings_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
             } else if cfg.ping_audience == allies::AUDIENCE {
                 cfg.ping_audience = 0;
             }
+            changed = true;
         }
         muted(ui, p, tr!("allies-share-pings-help"));
         if !cfg.pings_enabled {
             ui.add(egui::Label::new(RichText::new(tr!("allies-pings-off")).color(p.warn)).wrap());
         }
     });
+    changed
 }
 
 fn entries(cfg: &Settings, context: &Context) -> Vec<Entry> {
@@ -169,7 +179,9 @@ fn entries(cfg: &Settings, context: &Context) -> Vec<Entry> {
     out
 }
 
-fn residents(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context, view: &mut View) {
+/// True when a resident was ticked or a title allied.
+fn residents(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context, view: &mut View) -> bool {
+    let mut changed = false;
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
         let ticked = cfg.recipients.values().filter(|on| **on).count();
@@ -178,11 +190,13 @@ fn residents(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Conte
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if widgets::icon_button(ui, p, "user-minus", tr!("allies-clear"), ticked > 0) {
                     cfg.recipients.clear();
+                    changed = true;
                 }
                 if widgets::icon_button(ui, p, "user-plus", tr!("allies-add-nearby"), !context.nearby.is_empty()) {
                     for n in &context.nearby {
                         cfg.recipients.insert(n.id, true);
                     }
+                    changed = true;
                 }
             });
         });
@@ -211,14 +225,17 @@ fn residents(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Conte
             .max_height(380.0)
             .show(ui, |ui| {
                 for e in list {
-                    resident_row(ui, p, cfg, &e);
+                    changed |= resident_row(ui, p, cfg, &e);
                     ui.add_space(4.0);
                 }
             });
     });
+    changed
 }
 
-fn resident_row(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, e: &Entry) {
+/// True when the row's tick or title button changed a setting.
+fn resident_row(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, e: &Entry) -> bool {
+    let mut changed = false;
     ui.horizontal(|ui| {
         tile(ui, p, e.id, &e.name);
         ui.vertical(|ui| {
@@ -247,6 +264,7 @@ fn resident_row(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, e: &Entry) {
                 } else {
                     cfg.recipients.remove(&e.id);
                 }
+                changed = true;
             }
             if let Some(title) = &e.title
                 && !cfg.allies.has_tag(title)
@@ -254,10 +272,12 @@ fn resident_row(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, e: &Entry) {
                 let tip = tr!("allies-add-tag-hint", title = title.clone());
                 if widgets::icon_button(ui, p, "users-group", &tip, true) {
                     cfg.allies.add_tag(title);
+                    changed = true;
                 }
             }
         });
     });
+    changed
 }
 
 fn wearing(context: &Context, tag: &str) -> usize {
@@ -272,7 +292,9 @@ fn wearing(context: &Context, tag: &str) -> usize {
         .count()
 }
 
-fn groups(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) {
+/// True when the worn group or a title changed.
+fn groups(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) -> bool {
+    let mut changed = false;
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
         title(ui, p, "users-group", tr!("allies-groups"), None);
@@ -293,9 +315,10 @@ fn groups(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context)
             }
         }
         ui.add_enabled_ui(context.active_group.is_some(), |ui| {
-            widgets::switch_labeled(ui, p, &mut cfg.allies.active_group, tr!("allies-worn-group"));
+            changed |= widgets::switch_labeled(ui, p, &mut cfg.allies.active_group, tr!("allies-worn-group")).changed();
         });
         // One group switch for pings and marker sets: the sets follow the allied group.
+        changed |= cfg.share_group != cfg.allies.active_group;
         cfg.share_group = cfg.allies.active_group;
         muted(ui, p, tr!("allies-worn-group-help"));
         ui.add_space(10.0);
@@ -322,6 +345,7 @@ fn groups(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context)
         }
         if let Some(tag) = remove {
             cfg.allies.remove_tag(&tag);
+            changed = true;
         }
         ui.add_space(8.0);
         ui.label(RichText::new(tr!("allies-tags-near")).size(12.0).color(p.muted));
@@ -355,22 +379,26 @@ fn groups(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context)
                     .clicked()
                     {
                         cfg.allies.add_tag(&title);
+                        changed = true;
                     }
                 });
             });
         }
     });
+    changed
 }
 
-fn minimap(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
+/// True when the mini-map look of the allies changed.
+fn minimap(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) -> bool {
+    let mut changed = false;
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
         title(ui, p, "map", tr!("allies-minimap"), None);
         ui.add_space(4.0);
-        switch_row(ui, p, &mut cfg.allies.minimap, tr!("allies-minimap-color"), "");
+        changed |= switch_row(ui, p, &mut cfg.allies.minimap, tr!("allies-minimap-color"), "");
         ui.add_enabled_ui(cfg.allies.minimap, |ui| {
-            color_row(ui, p, "allies-color", tr!("common-color"), &mut cfg.allies.color, false);
-            switch_row(
+            changed |= color_row(ui, p, "allies-color", tr!("common-color"), &mut cfg.allies.color, false);
+            changed |= switch_row(
                 ui,
                 p,
                 &mut cfg.allies.ring,
@@ -379,4 +407,5 @@ fn minimap(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
             );
         });
     });
+    changed
 }

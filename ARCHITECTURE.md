@@ -1614,7 +1614,10 @@ the minimap draws them in their own colour.
 `combat/wire.rs` validates the official DEATH-only relay (helper 1.42, version-2 JSON envelope) with
 sequence/identity checks and bounded queues; `combat/awards.rs` holds the local multikill, life-streak and
 opponent-record rules; `combat/journal.rs` keeps the full session in memory and appends an acknowledged JSONL
-log on a background writer. `combat/pings.rs` owns session-only version-4 Place/Contact/Acknowledge/Cancel
+log on a background writer. `combat/tactical.rs` keeps the saved mini-map tool settings apart from the live
+`tactical::Session` (pings in flight and their queues, cooldowns and replay guards, marker set transfers, undo
+history, drawing and editing gestures), which one `reset` ends at logout and which never reaches the settings file.
+`combat/pings.rs` owns session-only version-4 Place/Contact/Acknowledge/Cancel
 messages with authenticated sender binding, replay guards and out-of-order control; `combat/{ping_ui,navigation}.rs`
 provide the native four-sector hold wheel and off-camera edge guidance; `combat/{sets,transfer}.rs` own
 region/grid-scoped annotation sets and bounded multipart sharing. The reward studio shares its presentation

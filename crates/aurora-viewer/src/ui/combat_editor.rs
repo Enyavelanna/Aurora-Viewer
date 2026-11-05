@@ -487,7 +487,7 @@ impl Editor {
             return;
         }
         cfg.sync_history();
-        let id = cfg.history.of.clone();
+        let id = cfg.session.history.of.clone();
         if self.identity != id {
             self.identity = id;
             self.pending = None;
@@ -754,12 +754,18 @@ impl Editor {
                 p,
                 "arrow-back-up",
                 tr!("combat-editor-undo"),
-                !cfg.history.undo.is_empty() || self.pending.is_some(),
+                !cfg.session.history.undo.is_empty() || self.pending.is_some(),
             ) {
                 self.flush(cfg);
                 moved |= cfg.undo();
             }
-            if widgets::icon_button(ui, p, "arrow-forward-up", tr!("combat-editor-redo"), !cfg.history.redo.is_empty()) {
+            if widgets::icon_button(
+                ui,
+                p,
+                "arrow-forward-up",
+                tr!("combat-editor-redo"),
+                !cfg.session.history.redo.is_empty(),
+            ) {
                 self.flush(cfg);
                 moved |= cfg.redo();
             }

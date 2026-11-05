@@ -462,13 +462,10 @@ impl MiniMap {
         // FIRE-32339: a plain drag moves the floater, Shift + drag pans the
         // map; a locked floater does not move, so any drag pans it
         if !opts.tactical.enabled || !opts.tactical.available() {
-            opts.tactical.draw = None;
-            opts.tactical.drawing_start = None;
-            opts.tactical.editing = false;
-            opts.tactical.cancel_gesture();
+            opts.tactical.stop_editing();
         }
-        let drawing = interactive && opts.tactical.draw.is_some();
-        let editing = interactive && opts.tactical.editing && !drawing && !ui.input(|i| i.modifiers.shift);
+        let drawing = interactive && opts.tactical.session.draw.is_some();
+        let editing = interactive && opts.tactical.session.editing && !drawing && !ui.input(|i| i.modifiers.shift);
         let pan_drag = !drawing && !editing && (ui.input(|i| i.modifiers.shift) || opts.mini_locked);
         let sense = if !interactive {
             Sense::hover()
@@ -826,19 +823,19 @@ impl MiniMap {
                 p.ink,
             );
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                opts.tactical.draw = None;
-                opts.tactical.drawing_start = None;
+                opts.tactical.session.draw = None;
+                opts.tactical.session.drawing_start = None;
             } else if let Some(pointer) = resp.hover_pos() {
                 let (x, y) = view.to_global(pointer);
                 let point = [x, y, world.agent.position.z as f64];
-                if let (Some(start), Some(shape)) = (opts.tactical.drawing_start, opts.tactical.draw)
+                if let (Some(start), Some(shape)) = (opts.tactical.session.drawing_start, opts.tactical.session.draw)
                     && let Some(preview) = crate::combat::tactical::Marker::drawn(shape, start, point, opts.tactical.colors[2])
                 {
                     opts.tactical.paint_map(&painter, &view, &preview);
                 }
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    if let Some(start) = opts.tactical.drawing_start {
-                        if let Some(shape) = opts.tactical.draw
+                    if let Some(start) = opts.tactical.session.drawing_start {
+                        if let Some(shape) = opts.tactical.session.draw
                             && let Some(marker) = crate::combat::tactical::Marker::drawn(shape, start, point, opts.tactical.colors[2])
                             && opts.tactical.markers.len() < 256
                         {
@@ -846,11 +843,11 @@ impl MiniMap {
                             let before = opts.tactical.snapshot();
                             opts.tactical.markers.push(marker);
                             opts.tactical.push_undo(before);
-                            opts.tactical.draw = None;
-                            opts.tactical.drawing_start = None;
+                            opts.tactical.session.draw = None;
+                            opts.tactical.session.drawing_start = None;
                         }
                     } else {
-                        opts.tactical.drawing_start = Some(point);
+                        opts.tactical.session.drawing_start = Some(point);
                     }
                 }
             }
@@ -863,11 +860,11 @@ impl MiniMap {
             let (shift, command) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 cfg.cancel_gesture();
-                cfg.editing = false;
+                cfg.session.editing = false;
                 return actions;
             }
             let can_edit = |cfg: &crate::combat::tactical::Settings, m: &crate::combat::tactical::Marker| cfg.shown(m) && !cfg.frozen(m);
-            if resp.hovered() && cfg.edit_drag.is_none() {
+            if resp.hovered() && cfg.session.edit_drag.is_none() {
                 let pressed = |key| ui.input(|i| i.key_pressed(key));
                 if command && pressed(egui::Key::Z) && !shift {
                     cfg.undo();
@@ -895,7 +892,7 @@ impl MiniMap {
                         .map(|h| (h, m.clone()))
                 });
                 if let Some((handle, original)) = handle.filter(|_| primary) {
-                    cfg.edit_drag = Some(crate::combat::tactical::EditGesture::Handle {
+                    cfg.session.edit_drag = Some(crate::combat::tactical::EditGesture::Handle {
                         handle,
                         original,
                         before: cfg.snapshot(),
@@ -917,7 +914,7 @@ impl MiniMap {
                             let (x, y) = view.to_global(at);
                             let originals: Vec<_> = cfg.markers.iter().filter(|m| m.selected && can_edit(cfg, m)).cloned().collect();
                             if primary && !originals.is_empty() {
-                                cfg.edit_drag = Some(crate::combat::tactical::EditGesture::Move {
+                                cfg.session.edit_drag = Some(crate::combat::tactical::EditGesture::Move {
                                     start: [x, y],
                                     originals,
                                     before: cfg.snapshot(),
@@ -935,7 +932,7 @@ impl MiniMap {
                 if resp.double_clicked_by(egui::PointerButton::Primary)
                     && crate::ui::combat_annotate::pick(&view, cfg.markers.iter().filter(|m| can_edit(cfg, m)), at).is_some()
                 {
-                    cfg.edit_drag = None;
+                    cfg.session.edit_drag = None;
                     actions.push(MiniMapAction::OpenMarkerEditor);
                 }
             }
@@ -943,7 +940,7 @@ impl MiniMap {
                 && let Some(pointer) = resp.interact_pointer_pos()
             {
                 let (x, y) = view.to_global(pointer);
-                match cfg.edit_drag.clone() {
+                match cfg.session.edit_drag.clone() {
                     Some(crate::combat::tactical::EditGesture::Move { start, originals, .. }) => {
                         for original in &originals {
                             if let Some(m) = cfg.markers.iter_mut().find(|m| m.id == original.id) {
@@ -961,9 +958,9 @@ impl MiniMap {
                 }
             }
             if resp.drag_stopped_by(egui::PointerButton::Primary)
-                || (cfg.edit_drag.is_some() && resp.clicked_by(egui::PointerButton::Primary))
+                || (cfg.session.edit_drag.is_some() && resp.clicked_by(egui::PointerButton::Primary))
             {
-                if let Some(gesture) = cfg.edit_drag.take() {
+                if let Some(gesture) = cfg.session.edit_drag.take() {
                     let before = gesture.before().clone();
                     if before.markers != cfg.markers {
                         cfg.push_undo(before);
@@ -1012,7 +1009,7 @@ impl MiniMap {
                     }
                 }
                 open_editor |= menu::item(ui, p, "pencil-filled", aurora_i18n::tr!("combat-editor-open"));
-                menu::toggle(ui, p, "edit", aurora_i18n::tr!("tactical-edit"), &mut cfg.editing);
+                menu::toggle(ui, p, "edit", aurora_i18n::tr!("tactical-edit"), &mut cfg.session.editing);
                 if duplicate {
                     let before = cfg.snapshot();
                     let copies: Vec<_> = cfg.markers.iter().filter(|m| m.selected).cloned().collect();
@@ -1139,8 +1136,8 @@ impl MiniMap {
                     menu::submenu(ui, p, "pencil-filled", aurora_i18n::tr!("combat-menu-draw"), true, |ui| {
                         for shape in [crate::combat::tactical::Shape::Rectangle, crate::combat::tactical::Shape::Line] {
                             if menu::item(ui, p, crate::ui::combat_editor::shape_icon(shape), shape.label()) {
-                                opts.tactical.draw = Some(shape);
-                                opts.tactical.drawing_start = None;
+                                opts.tactical.session.draw = Some(shape);
+                                opts.tactical.session.drawing_start = None;
                             }
                         }
                     });
@@ -1149,7 +1146,7 @@ impl MiniMap {
                         p,
                         "pointer-filled",
                         aurora_i18n::tr!("tactical-edit"),
-                        &mut opts.tactical.editing,
+                        &mut opts.tactical.session.editing,
                     );
                     if menu::item(ui, p, "pencil-filled", aurora_i18n::tr!("combat-editor-open")) {
                         actions.push(MiniMapAction::OpenMarkerEditor);

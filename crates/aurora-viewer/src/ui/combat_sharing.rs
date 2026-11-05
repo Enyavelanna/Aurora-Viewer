@@ -22,23 +22,25 @@ pub(crate) fn show(
     available: bool,
     goto: &mut Option<usize>,
 ) -> bool {
-    let before = cfg.clone();
+    // Each card says whether it changed a setting: sending a set or
+    // dismissing a received one touches the session only.
+    let mut changed = false;
     if !available {
         notice(ui, p, tr!("sharing-unavailable"));
         ui.add_space(8.0);
     }
     ui.add_enabled_ui(available, |ui| {
-        header(ui, p, cfg, context);
+        changed |= header(ui, p, cfg, context);
         ui.add_space(10.0);
         ui.add_enabled_ui(cfg.share, |ui| {
-            audience(ui, p, cfg, context);
+            changed |= audience(ui, p, cfg, context);
             ui.add_space(10.0);
             if ui.available_width() >= 760.0 {
                 ui.columns(2, |columns| {
                     columns[0].vertical(|ui| {
                         who_card(ui, p, context, goto);
                         ui.add_space(10.0);
-                        inbox_card(ui, p, cfg, context);
+                        changed |= inbox_card(ui, p, cfg, context);
                     });
                     send_card(&mut columns[1], p, cfg, context);
                 });
@@ -47,11 +49,11 @@ pub(crate) fn show(
                 ui.add_space(10.0);
                 send_card(ui, p, cfg, context);
                 ui.add_space(10.0);
-                inbox_card(ui, p, cfg, context);
+                changed |= inbox_card(ui, p, cfg, context);
             }
         });
     });
-    *cfg != before
+    changed
 }
 
 /// The members of the active group, when they are known.
@@ -94,28 +96,31 @@ pub(super) fn title(ui: &mut egui::Ui, p: &Palette, icon: &str, text: &str, coun
     });
 }
 
-fn header(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) {
+/// True when a setting changed.
+fn header(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) -> bool {
+    let mut changed = false;
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            widgets::switch(ui, p, &mut cfg.share);
+            changed |= widgets::switch(ui, p, &mut cfg.share).changed();
             ui.label(RichText::new(tr!("tactical-share")).strong().size(15.0).color(p.ink));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_enabled_ui(cfg.share, |ui| {
-                    pill(
+                    changed |= pill(
                         ui,
                         p,
                         &mut cfg.receive_enabled,
                         tr!("sharing-receiving"),
                         tr!("sharing-receiving-help"),
                     );
-                    pill(ui, p, &mut cfg.send_enabled, tr!("sharing-sending"), tr!("sharing-sending-help"));
+                    changed |= pill(ui, p, &mut cfg.send_enabled, tr!("sharing-sending"), tr!("sharing-sending-help"));
                 });
             });
         });
         ui.add_space(4.0);
         muted(ui, p, &summary(cfg, context));
     });
+    changed
 }
 
 /// One line saying where pings go and whom you accept from.
@@ -140,7 +145,9 @@ fn summary(cfg: &Settings, context: &Context) -> String {
     format!("{sending} · {receiving}")
 }
 
-fn audience(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) {
+/// True when the audience changed.
+fn audience(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) -> bool {
+    let mut changed = false;
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
         title(ui, p, "share", tr!("tactical-ping-sharing"), None);
@@ -150,6 +157,7 @@ fn audience(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Contex
             let choices = [(tr!("tactical-local"), false), (tr!("tactical-allies"), false)];
             if widgets::segmented(ui, p, &mut selected, &choices) {
                 cfg.ping_audience = if selected == 1 { crate::combat::allies::AUDIENCE } else { 0 };
+                changed = true;
             }
         });
         let reach = match (cfg.ping_audience, ping_reach(cfg, context)) {
@@ -160,6 +168,7 @@ fn audience(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Contex
         };
         muted(ui, p, &reach);
     });
+    changed
 }
 
 /// Initials on a coloured tile, the colour picked from the resident's id.
@@ -268,31 +277,37 @@ fn send_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Conte
         } else if let Some(n) = reach {
             muted(ui, p, &tr!("sharing-send-reach", count = n.to_string()));
         }
-        if !cfg.set_outgoing.is_empty() && cfg.set_total > 0 {
-            let done = cfg.set_total - cfg.set_outgoing.len().min(cfg.set_total);
-            let text = tr!("sharing-progress", done = done.to_string(), total = cfg.set_total.to_string());
+        if !cfg.session.set_outgoing.is_empty() && cfg.session.set_total > 0 {
+            let done = cfg.session.set_total - cfg.session.set_outgoing.len().min(cfg.session.set_total);
+            let text = tr!(
+                "sharing-progress",
+                done = done.to_string(),
+                total = cfg.session.set_total.to_string()
+            );
             ui.add_space(4.0);
             widgets::progress(
                 ui,
                 p,
                 "sharing-progress",
-                done as f32 / cfg.set_total as f32,
+                done as f32 / cfg.session.set_total as f32,
                 ui.available_width(),
                 &text,
                 None,
             );
         }
-        if cfg.share_error {
+        if cfg.session.share_error {
             ui.add_space(4.0);
             ui.add(egui::Label::new(RichText::new(tr!("tactical-share-error")).color(p.warn)).wrap());
         }
     });
 }
 
-fn inbox_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) {
+/// True when a received set was kept (the library changed).
+fn inbox_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context) -> bool {
+    let mut changed = false;
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
-        let count = cfg.inbox.previews.len();
+        let count = cfg.session.inbox.previews.len();
         title(ui, p, "inbox", tr!("sharing-inbox"), (count > 0).then_some(count));
         if !cfg.receive_enabled {
             muted(ui, p, tr!("sharing-summary-not-receiving"));
@@ -303,12 +318,13 @@ fn inbox_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Cont
         }
         let in_region = cfg.current_region.is_some();
         let mut remove = None;
-        for (index, set) in cfg.inbox.previews.iter().enumerate() {
+        for (index, set) in cfg.session.inbox.previews.iter().enumerate() {
             ui.add_space(4.0);
             widgets::surface(ui, p, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new(&set.name).strong().color(p.ink));
                 let sender = cfg
+                    .session
                     .inbox
                     .senders
                     .get(&set.id)
@@ -350,14 +366,16 @@ fn inbox_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Cont
             });
         }
         if let Some((index, save)) = remove {
-            let set = cfg.inbox.previews.remove(index);
-            cfg.inbox.senders.remove(&set.id);
+            let set = cfg.session.inbox.previews.remove(index);
+            cfg.session.inbox.senders.remove(&set.id);
             if save && let Some(key) = cfg.current_region.clone() {
                 let region = cfg.library.region_mut(&key, &cfg.current_region_name);
                 let active = region.active;
                 region.add(set.name.clone(), &set.markers);
                 region.active = active;
+                changed = true;
             }
         }
     });
+    changed
 }

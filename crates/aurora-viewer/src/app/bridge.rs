@@ -146,13 +146,7 @@ impl App {
             // Expiry must also run when the minimap window is closed.
             cfg.prune();
             if !cfg.pings_enabled {
-                cfg.outgoing.clear();
-                cfg.ping_controls.clear();
-                for ping in &mut cfg.pings {
-                    if ping.sharing == crate::combat::pings::ShareState::Queued {
-                        ping.sharing = crate::combat::pings::ShareState::Local;
-                    }
-                }
+                cfg.session.stop_pings();
             }
             for (sender, payload) in std::mem::take(&mut self.bridge_runtime.tactical_events) {
                 if !cfg.available() || !cfg.share || !cfg.receive_enabled || payload.len() > 640 {
@@ -164,6 +158,7 @@ impl App {
                 if !selected
                     && !ally
                     && !cfg
+                        .session
                         .pings
                         .iter()
                         .any(|p| p.sender == sender || p.own() && p.recipients.contains(&sender))
@@ -171,7 +166,7 @@ impl App {
                     continue;
                 }
                 let Ok(bytes) = STANDARD.decode(&payload) else {
-                    cfg.share_error = true;
+                    cfg.session.share_error = true;
                     continue;
                 };
                 if let Ok(message) = serde_json::from_slice::<crate::combat::pings::Message>(&bytes) {
@@ -179,11 +174,12 @@ impl App {
                     let participant = match &message.action {
                         Action::Place { .. } => false,
                         Action::Acknowledge { id } => cfg
+                            .session
                             .pings
                             .iter()
                             .any(|p| p.own() && p.marker.id == *id && p.recipients.contains(&sender)),
                         Action::Cancel { id } | Action::Contact { id } => {
-                            cfg.pings.iter().any(|p| p.sender == sender && p.marker.id == *id)
+                            cfg.session.pings.iter().any(|p| p.sender == sender && p.marker.id == *id)
                         }
                     };
                     if selected || ally || participant {
@@ -192,9 +188,9 @@ impl App {
                 } else if !selected {
                     continue;
                 } else if let Ok(chunk) = serde_json::from_slice::<crate::combat::transfer::Chunk>(&bytes) {
-                    cfg.share_error |= cfg.inbox.accept(sender, chunk, Instant::now()).is_err();
+                    cfg.session.share_error |= cfg.session.inbox.accept(sender, chunk, Instant::now()).is_err();
                 } else {
-                    cfg.share_error = true;
+                    cfg.session.share_error = true;
                 }
             }
             let outgoing: Vec<_> = if cfg.available()
@@ -204,17 +200,10 @@ impl App {
                 && (cfg.ping_audience != 2 || group_members.is_some())
                 && (cfg.ping_audience != crate::combat::allies::AUDIENCE || allies_ready)
             {
-                cfg.outgoing.drain(..cfg.outgoing.len().min(1)).collect()
+                cfg.session.outgoing.drain(..cfg.session.outgoing.len().min(1)).collect()
             } else {
                 if !cfg.available() || !cfg.share || !cfg.send_enabled {
-                    cfg.outgoing.clear();
-                    cfg.set_outgoing.clear();
-                    cfg.ping_controls.clear();
-                    for ping in &mut cfg.pings {
-                        if ping.sharing == crate::combat::pings::ShareState::Queued {
-                            ping.sharing = crate::combat::pings::ShareState::Local;
-                        }
-                    }
+                    cfg.session.stop_sharing();
                 }
                 Vec::new()
             };
@@ -226,7 +215,7 @@ impl App {
             {
                 let mut payloads = Vec::new();
                 for (marker, kind) in outgoing {
-                    if !cfg.pings.iter().any(|p| p.marker.id == marker.id) {
+                    if !cfg.session.pings.iter().any(|p| p.marker.id == marker.id) {
                         continue;
                     }
                     let id = marker.id;
@@ -236,27 +225,30 @@ impl App {
                         kind,
                     }));
                     let Ok(bytes) = encoded else {
-                        cfg.share_error = true;
+                        cfg.session.share_error = true;
                         continue;
                     };
                     if !marker.valid() || bytes.len() > 480 {
-                        cfg.share_error = true;
+                        cfg.session.share_error = true;
                         continue;
                     }
                     payloads.push((bytes, true, Some(id), None));
                 }
                 // A response/cancel keeps its original recipients even when the
                 // player subsequently changes the placement audience.
-                if let Some(control) = cfg.ping_controls.pop_front()
+                if let Some(control) = cfg.session.ping_controls.pop_front()
                     && let Ok(bytes) = serde_json::to_vec(&control.message)
                 {
                     payloads.push((bytes, true, None, Some(control.targets)));
                 }
                 if (!cfg.share_group || group_members.is_some())
-                    && cfg.last_set_send.is_none_or(|at| at.elapsed() >= Duration::from_millis(100))
-                    && let Some(chunk) = cfg.set_outgoing.pop_front()
+                    && cfg
+                        .session
+                        .last_set_send
+                        .is_none_or(|at| at.elapsed() >= Duration::from_millis(100))
+                    && let Some(chunk) = cfg.session.set_outgoing.pop_front()
                 {
-                    cfg.last_set_send = Some(Instant::now());
+                    cfg.session.last_set_send = Some(Instant::now());
                     payloads.push((chunk.into_bytes(), false, None, None));
                 }
                 for (bytes, ping, ping_id, explicit_targets) in payloads {
@@ -284,7 +276,7 @@ impl App {
                         let recipients: Vec<_> = explicit_targets.unwrap_or_else(|| recipients.into_iter().collect());
                         let invalid_recipients = recipients.is_empty() || recipients.len() > 512;
                         if let Some(id) = ping_id
-                            && let Some(own) = cfg.pings.iter_mut().find(|p| p.own() && p.marker.id == id)
+                            && let Some(own) = cfg.session.pings.iter_mut().find(|p| p.own() && p.marker.id == id)
                         {
                             own.recipients = if invalid_recipients {
                                 Default::default()
@@ -298,9 +290,9 @@ impl App {
                             };
                         }
                         if invalid_recipients {
-                            cfg.share_error = true;
+                            cfg.session.share_error = true;
                             if !ping {
-                                cfg.set_outgoing.clear();
+                                cfg.session.set_outgoing.clear();
                             }
                             continue;
                         }
@@ -318,7 +310,7 @@ impl App {
                     }
                 }
             }
-            if std::mem::take(&mut cfg.sound_pending)
+            if std::mem::take(&mut cfg.session.sound_pending)
                 && cfg.ping_sound
                 && let Ok(id) = Uuid::parse_str(&cfg.sound_asset)
             {
@@ -328,7 +320,7 @@ impl App {
                 self.send(command);
             }
         }
-        for ping in &self.settings.maps.tactical.pings {
+        for ping in &self.settings.maps.tactical.session.pings {
             if !ping.own() {
                 self.world.social.want_name(ping.sender);
             }
