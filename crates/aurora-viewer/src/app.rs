@@ -8538,6 +8538,7 @@ impl App {
         }
         // ---- network events (time-boxed)
         let t_ev = Instant::now();
+        // the one region change detection of the frame: the bridge reads the result
         if let Some(region) = self.world.main_region {
             let key = crate::combat::sets::RegionKey {
                 grid: self.settings.login_uri(),

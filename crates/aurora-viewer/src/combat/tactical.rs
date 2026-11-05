@@ -500,6 +500,10 @@ impl MapView {
 pub(crate) struct Settings {
     pub library: super::sets::Library,
     pub current_region: Option<super::sets::RegionKey>,
+    /// The name of `current_region`, for the library entry the region gets
+    /// on first use: a region visited without placing anything has none.
+    #[serde(skip)]
+    pub current_region_name: String,
     pub enabled: bool,
     pub tools_enabled: bool,
     #[serde(skip)]
@@ -595,6 +599,7 @@ impl Default for Settings {
         Self {
             library: Default::default(),
             current_region: None,
+            current_region_name: String::new(),
             enabled: false,
             tools_enabled: true,
             combat_enabled: true,
@@ -840,7 +845,7 @@ impl Settings {
         if let Some(view) = file.view {
             self.map_view = view.sane();
         }
-        let region = self.library.region_mut(&key, "");
+        let region = self.library.region_mut(&key, &self.current_region_name);
         let name = if file.name.is_empty() {
             tr!("tactical-set-default").to_owned()
         } else {
@@ -882,26 +887,33 @@ impl Settings {
             _ => self.share_error = true,
         }
     }
+    /// Makes `key` the current region and reads its active set into the
+    /// working copy. The library gets no entry for it: the first marker,
+    /// layer change, import or visit of the sets panel creates the region
+    /// and its default set, so a region only travelled through leaves
+    /// nothing in the settings.
     pub fn enter_region(&mut self, key: super::sets::RegionKey, name: &str) {
         if self.current_region.as_ref() == Some(&key) {
             return;
         }
         self.cancel_gesture();
         self.editing = false;
-        if let Some(previous) = self.current_region.take() {
-            let region = self.library.region_mut(&previous, "");
-            region.save(&self.markers);
-            region.save_layers(&self.layers);
+        if self.current_region.is_some() {
+            self.store_set();
+            self.current_region = None;
         } else if !self.markers.is_empty() {
             self.library.unassigned.append(&mut self.markers);
         }
-        let region = self.library.region_mut(&key, name);
-        if region.sets.is_empty() {
-            region.add(tr!("tactical-set-default").into(), &[]);
-        }
-        let set = region.selected().cloned();
+        let set = self
+            .library
+            .regions
+            .iter()
+            .find(|r| r.key == key)
+            .and_then(|r| r.selected())
+            .cloned();
         self.adopt(set.as_ref());
         self.current_region = Some(key);
+        self.current_region_name = name.to_owned();
         self.draw = None;
         self.drawing_start = None;
         self.pings.clear();
@@ -919,14 +931,27 @@ impl Settings {
         if self.edit_drag.is_some() {
             return;
         }
-        if let Some(key) = &self.current_region {
-            let region = self.library.region_mut(key, "");
-            if region.active.is_none() && !self.markers.is_empty() {
-                region.add(tr!("tactical-set-default").into(), &self.markers);
-            }
-            region.save(&self.markers);
-            region.save_layers(&self.layers);
+        self.store_set();
+    }
+
+    /// Writes the working copy into the current region's active set. A
+    /// region without an entry gets one, with a default set, as soon as
+    /// the working copy holds something (a marker, or layers that are not
+    /// the default ones); untouched, it stays out of the library.
+    fn store_set(&mut self) {
+        let Some(key) = self.current_region.clone() else {
+            return;
+        };
+        let used = !self.markers.is_empty() || self.layers != Layer::defaults();
+        if !used && !self.library.regions.iter().any(|r| r.key == key) {
+            return;
         }
+        let region = self.library.region_mut(&key, &self.current_region_name);
+        if region.active.is_none() && used {
+            region.add(tr!("tactical-set-default").into(), &self.markers);
+        }
+        region.save(&self.markers);
+        region.save_layers(&self.layers);
     }
 
     pub fn add_marker(&mut self, position: [f64; 3]) {
@@ -1454,7 +1479,12 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
         return;
     };
     cfg.save_set();
-    let region = cfg.library.region_mut(&key, "");
+    let region = cfg.library.region_mut(&key, &cfg.current_region_name);
+    // a fresh region shows its default set, created here on first use
+    if region.sets.is_empty() {
+        region.add(tr!("tactical-set-default").into(), &cfg.markers);
+        region.save_layers(&cfg.layers);
+    }
     let previous = region.active;
     egui::ComboBox::from_id_salt("combat-set")
         .selected_text(region.selected().map(|s| s.name.as_str()).unwrap_or_default())
@@ -1505,7 +1535,7 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
             .clicked()
             {
                 let markers = std::mem::take(&mut cfg.library.unassigned);
-                let region = cfg.library.region_mut(&key, "");
+                let region = cfg.library.region_mut(&key, &cfg.current_region_name);
                 region.add(tr!("tactical-set-unassigned").into(), &markers);
                 let set = region.selected().cloned();
                 cfg.adopt(set.as_ref());
@@ -1762,6 +1792,58 @@ mod tests {
         assert!(!cfg.layers[3].visible && cfg.layers[3].locked);
         assert_eq!(cfg.markers[0].style.layer, 3);
         assert!(!cfg.layer_visible(&cfg.markers[0]) && cfg.layer_locked(&cfg.markers[0]));
+    }
+
+    #[test]
+    fn the_first_marker_of_a_fresh_region_creates_its_default_set() {
+        let mut cfg = Settings::default();
+        let key = super::super::sets::RegionKey {
+            grid: "g".into(),
+            region: 9,
+        };
+        cfg.enter_region(key.clone(), "Fresh");
+        cfg.save_set();
+        assert!(cfg.library.regions.is_empty(), "entering a region adds nothing");
+        assert_eq!(cfg.active_set_name(), "");
+        cfg.place_marker(Shape::Pin, [1.0, 2.0, 3.0]);
+        cfg.save_set();
+        let region = cfg
+            .library
+            .regions
+            .iter()
+            .find(|r| r.key == key)
+            .expect("the region now has an entry");
+        assert_eq!(region.name, "Fresh");
+        assert_eq!(region.sets.len(), 1);
+        let set = region.selected().expect("the default set is active");
+        assert_eq!(set.name, tr!("tactical-set-default"));
+        assert_eq!(set.markers, cfg.markers);
+        assert_eq!(cfg.active_set_name(), tr!("tactical-set-default"));
+        // leaving and coming back finds the marker in the set
+        cfg.enter_region(
+            super::super::sets::RegionKey {
+                grid: "g".into(),
+                region: 10,
+            },
+            "Next",
+        );
+        assert!(cfg.markers.is_empty());
+        cfg.enter_region(key, "Fresh");
+        assert_eq!(cfg.markers.len(), 1);
+        assert_eq!(cfg.library.regions.len(), 1, "the region passed through has no entry");
+        // layers changed before any marker count as a use too
+        let mut layered = Settings::default();
+        layered.enter_region(
+            super::super::sets::RegionKey {
+                grid: "g".into(),
+                region: 11,
+            },
+            "Layered",
+        );
+        layered.layers[0].locked = true;
+        layered.save_set();
+        assert_eq!(layered.library.regions.len(), 1);
+        assert!(layered.library.regions[0].selected().expect("set").layers[0].locked);
     }
 
     #[test]

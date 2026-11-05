@@ -109,13 +109,6 @@ impl App {
             self.send(command);
         }
         let endpoint = self.sync_bridge_queries();
-        if let Some(region) = self.world.main_region {
-            let key = crate::combat::sets::RegionKey {
-                grid: self.settings.login_uri(),
-                region,
-            };
-            self.settings.maps.tactical.enter_region(key, &self.world.region_name());
-        }
         for group in self.settings.maps.tactical.group_colors.keys() {
             if self.settings.maps.tactical.dots_enabled {
                 self.world.group_data.ensure_members(*group);

@@ -201,6 +201,20 @@ mod tests {
         assert_ne!(region.selected().expect("set").markers[0].id, markers[0].id);
         region.remove_active();
         assert_ne!(region.active, Some(original));
+        // ten regions travelled through without placing anything: no entry, no set
+        let before = serde_json::to_string(&loaded.library).expect("encode");
+        for region in 10..20 {
+            loaded.enter_region(
+                RegionKey {
+                    grid: "grid-c".into(),
+                    region,
+                },
+                "Passing through",
+            );
+            loaded.save_set();
+        }
+        assert_eq!(serde_json::to_string(&loaded.library).expect("encode"), before);
+        assert_eq!(loaded.library.regions.len(), 2);
     }
 
     #[test]

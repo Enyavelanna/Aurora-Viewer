@@ -353,7 +353,7 @@ fn inbox_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Cont
             let set = cfg.inbox.previews.remove(index);
             cfg.inbox.senders.remove(&set.id);
             if save && let Some(key) = cfg.current_region.clone() {
-                let region = cfg.library.region_mut(&key, "");
+                let region = cfg.library.region_mut(&key, &cfg.current_region_name);
                 let active = region.active;
                 region.add(set.name.clone(), &set.markers);
                 region.active = active;
