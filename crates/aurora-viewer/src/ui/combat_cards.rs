@@ -92,7 +92,8 @@ pub(crate) fn badge(ui: &mut egui::Ui, p: &Palette, text: &str, color: Color32) 
         .painter()
         .layout_no_wrap(text.to_owned(), egui::FontId::proportional(11.0), p.ink);
     let (rect, _) = ui.allocate_exact_size(galley.size() + vec2(12.0, 4.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, rect.height() / 2.0, color.gamma_multiply(0.25));
+    ui.painter()
+        .rect_filled(rect, ui.visuals().widgets.inactive.corner_radius, color.gamma_multiply(0.25));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, p.ink);
 }
 

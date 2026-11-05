@@ -107,8 +107,9 @@ impl CombatWindow {
                             self.editor.open = true;
                         }
                         egui::ScrollArea::vertical().id_salt((WINDOW, self.tab)).show(ui, |ui| {
-                            let r = options::combat_controls(ui, p, settings, &mut self.controls, self.tab);
-                            result.changed |= r.changed;
+                            // The preference row engine, native cogs included, draws the cards.
+                            let mut r = options::OptionsResult::default();
+                            result.changed |= super::combat_pages::show(ui, p, settings, &mut self.controls, &mut r, self.tab);
                             result.combat_preview = r.combat_preview;
                         });
                         if let Some(tab) = self.controls.combat_goto.take() {

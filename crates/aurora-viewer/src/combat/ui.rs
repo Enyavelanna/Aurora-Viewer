@@ -145,7 +145,6 @@ pub(crate) fn overlays(
         let duration = cfg.marker_seconds.clamp(0.05, 2.0);
         if age < duration {
             let [r, g, b, a] = cfg.marker_color;
-            // theme-guard: content — configured kill confirmation colour.
             let c = egui::Color32::from_rgba_unmultiplied(
                 r,
                 g,

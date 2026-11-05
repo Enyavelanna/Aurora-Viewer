@@ -27,13 +27,6 @@ use std::collections::{HashMap, HashSet};
 /// The preferences' window (its layout is saved under this id).
 pub const WINDOW: &str = "preferences";
 
-/// Reuse the preference row engine, including native cogs, in Combat's floater.
-pub(crate) fn combat_controls(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, tab: usize) -> OptionsResult {
-    let mut r = OptionsResult::default();
-    r.changed |= super::combat_pages::show(ui, p, s, st, &mut r, tab);
-    r
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Capture {
     Binding(crate::keybinds::Action, usize),
@@ -73,7 +66,6 @@ pub enum Page {
     System,
     Network,
     Fun,
-    Combat,
 }
 
 impl Page {
@@ -125,7 +117,6 @@ impl Page {
             Page::System => "system",
             Page::Network => "network",
             Page::Fun => "fun",
-            Page::Combat => "combat",
         }
     }
 
@@ -152,7 +143,6 @@ impl Page {
             Page::System => aurora_i18n::tr!("ui-options-page-system"),
             Page::Network => aurora_i18n::tr!("ui-options-network-and-cache"),
             Page::Fun => aurora_i18n::tr!("ui-options-fun"),
-            Page::Combat => aurora_i18n::tr!("combat-preferences-title"),
         }
     }
 
@@ -180,7 +170,6 @@ impl Page {
             Page::System => aurora_i18n::tr!("ui-options-about-system"),
             Page::Network => aurora_i18n::tr!("ui-options-about-network"),
             Page::Fun => aurora_i18n::tr!("ui-options-about-fun"),
-            Page::Combat => aurora_i18n::tr!("combat-preferences-about"),
         }
     }
 
@@ -207,7 +196,6 @@ impl Page {
             Page::System => "world-filled",
             Page::Network => "cloud-data-connection-filled",
             Page::Fun => "confetti-filled",
-            Page::Combat => "alert-triangle-filled",
         }
     }
 

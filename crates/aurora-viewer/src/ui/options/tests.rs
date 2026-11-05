@@ -676,15 +676,13 @@ fn combat_preferences_are_hidden_and_reset_without_erasing_annotations() {
         "maps.tactical.enabled",
         "maps.tactical.recipients",
     ] {
-        assert!(!paths.iter().any(|(page, name)| *page == Page::Combat && name == path));
         assert!(
-            !paths.iter().any(|(page, name)| *page == Page::Chat && name == path),
-            "combat controls do not belong to Chat"
+            !paths.iter().any(|(_, name)| name == path),
+            "{path}: Combat settings live in the Combat window, not in Preferences"
         );
     }
-    assert!(!Page::ALL.contains(&Page::Combat));
+    assert!(Page::ALL.iter().all(|page| page.key() != "combat"), "no Combat page in Preferences");
     assert_eq!(Page::Fun.section(), Some(aurora_i18n::tr!("ui-options-section-extras")));
-    assert_eq!(Page::Combat.section(), None, "inherits the Extras section");
     let mut s = Settings::default();
     s.combat.journal = true;
     s.combat.voices = true;
@@ -695,8 +693,10 @@ fn combat_preferences_are_hidden_and_reset_without_erasing_annotations() {
     let markers = s.maps.tactical.markers.clone();
     let pings = s.maps.tactical.pings.clone();
     let combat = s.combat.clone();
-    reset_page_settings(Page::Combat, &mut s);
-    assert_eq!(s.combat, combat, "hidden Combat settings are not reset by Preferences");
+    for page in Page::ALL {
+        reset_page_settings(page, &mut s);
+    }
+    assert_eq!(s.combat, combat, "Combat settings are not reset by any Preferences page");
     assert!(s.maps.tactical.enabled && s.maps.tactical.pings_enabled);
     assert_eq!(s.maps.tactical.markers, markers);
     assert_eq!(s.maps.tactical.pings, pings);

@@ -1607,7 +1607,7 @@ remain in progress.
 ## `aurora-viewer` in detail
 
 Combat 2.0 lives in `combat.rs` and `combat/{ui,wire,awards,allies,journal,pings,ping_ui,navigation,sets,tactical,transfer}.rs`,
-with `ui/combat_window.rs`, `ui/combat_rewards.rs`, `ui/combat_allies.rs`, `ui/combat_editor.rs` and `ui/options/pages/combat.rs`.
+with `ui/combat_window.rs`, `ui/combat_rewards.rs`, `ui/combat_allies.rs`, `ui/combat_editor.rs`, and its tabs of cards in `ui/combat_pages.rs`, `ui/combat_cards.rs` and `ui/combat_sharing.rs`.
 `combat/allies.rs` resolves who counts as an ally (the ticked residents, shared with the Sharing teammates, the worn
 group, and group titles worn around us): `app/bridge.rs` sends pings to them (audience 3) and accepts theirs, and
 the minimap draws them in their own colour.

@@ -14557,8 +14557,7 @@ impl App {
         self.options_ui.rlva_camera_fov_locked = self.world.rlva.camera_owner().is_some();
         self.options_ui.joystick = self.joystick.snapshot.clone();
         self.options_ui.flycam_active = self.joystick.active;
-        if open && (self.options_ui.page == ui::options::Page::Combat || !self.options_ui.query.is_empty() || self.options_ui.modified_view)
-        {
+        if open && (!self.options_ui.query.is_empty() || self.options_ui.modified_view) {
             self.options_ui.tactical_context = crate::combat::tactical::Context::from_world(&self.world, &self.settings.maps.tactical);
         }
         let before_camera = self.settings.camera.clone();
