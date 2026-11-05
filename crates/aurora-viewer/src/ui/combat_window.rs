@@ -28,6 +28,10 @@ impl CombatWindow {
     pub fn take_export(&mut self) -> Option<super::combat_editor::ExportJob> {
         self.editor.take_export()
     }
+    /// A picture is being made: the editor's button waits for it.
+    pub fn set_exporting(&mut self, exporting: bool) {
+        self.editor.exporting = exporting;
+    }
     pub fn show_editor_map(&mut self) {
         self.editor.open = true;
         self.editor.show_map();

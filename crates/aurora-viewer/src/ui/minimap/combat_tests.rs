@@ -159,3 +159,95 @@ fn combat_two_click_shapes_claim_double_clicks_and_escape_preserves_existing_mar
     assert!(opts.tactical.session.draw.is_none() && opts.tactical.session.drawing_start.is_none());
     assert_eq!(opts.tactical.markers.len(), 1);
 }
+
+#[test]
+fn the_export_rasters_come_from_copied_inputs_layer_by_layer() {
+    use crate::combat::tactical::{Ground, MapView};
+    let mut heightmap = crate::world::terrain::Heightmap::new(256, 256);
+    for (i, h) in heightmap.heights.iter_mut().enumerate() {
+        *h = 10.0 + (i % 256) as f32 * 0.1;
+    }
+    let inputs = |view: MapView, markers_only: bool| ExportInputs {
+        heightmap: heightmap.clone(),
+        water: 20.0,
+        origin: (256.0, 512.0),
+        size_m: (256.0, 256.0),
+        view,
+        markers_only,
+        objects: view.objects.then(|| {
+            vec![ObjectDot {
+                gx: 256.0 + 128.0,
+                gy: 512.0 + 128.0,
+                r: 2.0,
+                color: YOU_ABOVE,
+            }]
+        }),
+        parcels: view.parcels.then(|| ParcelInputs {
+            regions: vec![ParcelRegion {
+                origin: (256.0, 512.0),
+                size: (256.0, 256.0),
+                // one south line on the second cell row, nothing else
+                overlay: Some((64, 64, {
+                    let mut cells = vec![0u8; 64 * 64];
+                    cells[64] = 0x80;
+                    cells
+                })),
+                banned: None,
+            }],
+        }),
+        for_sale: false,
+    };
+    let side = 64;
+    // the markers alone: no ground, only what the view asks for
+    let only = export_rasters(&inputs(MapView::preset(2, false), true), side);
+    assert!(only.is_empty(), "a clean view of the markers alone has no layer");
+    let full = export_rasters(&inputs(MapView::default(), false), side);
+    assert_eq!(full.len(), 3, "ground, objects, parcels");
+    assert!(full.iter().all(|img| img.size == [side, side]));
+    // shaded ground: water on the west (low), land further east
+    let ground = &full[0];
+    assert_ne!(ground.pixels[0], ground.pixels[side - 1], "the ground is shaded by height");
+    let flat = export_rasters(
+        &inputs(
+            MapView {
+                ground: Ground::Flat,
+                ..MapView::preset(2, false)
+            },
+            false,
+        ),
+        side,
+    );
+    assert_eq!(flat.len(), 1);
+    assert!(
+        flat[0].pixels.iter().all(|px| *px == flat[0].pixels[0]),
+        "a flat ground is one colour"
+    );
+    // the object: a square at the centre, (2 r tpm) texels wide
+    let objects = &full[1];
+    let centre = side / 2;
+    assert_eq!(objects.pixels[centre * side + centre], YOU_ABOVE);
+    assert_eq!(objects.pixels[0], Color32::TRANSPARENT);
+    assert_eq!(
+        objects.pixels.iter().filter(|px| **px == YOU_ABOVE).count(),
+        1,
+        "round(2 × 2 m × 0.25 texels/m) = 1 texel"
+    );
+    // the parcel lines: the region's north border along the top row, the
+    // cell's south line one texel wide on the bottom row (the region's own
+    // south edge falls on the row below the picture, as on the mini-map)
+    let parcels = &full[2];
+    let line = Color32::from_rgba_unmultiplied(255, 255, 255, 255);
+    assert!(parcels.pixels[..side].iter().all(|px| *px == line), "the north border");
+    assert_eq!(
+        parcels.pixels[(side - 1) * side],
+        line,
+        "the cell's south line starts at its west corner"
+    );
+    assert_eq!(parcels.pixels[(side - 1) * side + 1], line, "and ends at its east corner");
+    assert_eq!(
+        parcels.pixels[(side - 1) * side + 2],
+        Color32::TRANSPARENT,
+        "the next cell has no line"
+    );
+    assert_eq!(parcels.pixels[(side - 2) * side + 1], Color32::TRANSPARENT, "nothing above it");
+}

@@ -13368,6 +13368,7 @@ combat-editor-export-help = Saves the terrain, the markers, a legend of the pins
 combat-editor-export-with-title = Region and set name
 combat-editor-export-with-legend = Legend of the pins
 combat-editor-export-image = Save the picture…
+combat-editor-exporting = Saving the picture…
 combat-export-legend = Legend
 combat-editor-file-title = Set file
 combat-editor-file-help = Keeps a whole set, its layers included, in a file, or brings one in as a new set.

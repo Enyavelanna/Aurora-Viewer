@@ -312,6 +312,8 @@ pub(crate) struct Editor {
     collapsed: BTreeSet<usize>,
     /// The export asked for, and the choices behind it.
     export_job: Option<ExportJob>,
+    /// A picture is being made on a worker: the button waits for it.
+    pub exporting: bool,
     export_size: usize,
     export_title: bool,
     export_legend: bool,
@@ -352,6 +354,7 @@ impl Default for Editor {
             row_hover_prev: None,
             collapsed: BTreeSet::new(),
             export_job: None,
+            exporting: false,
             export_size: 1,
             export_title: true,
             export_legend: true,
@@ -2294,7 +2297,7 @@ impl Editor {
             tr!("combat-editor-export-image"),
             widgets::ActionKind::Primary,
             vec2(0.0, 28.0),
-            true,
+            !self.exporting,
         )
         .clicked()
         {
@@ -2304,6 +2307,9 @@ impl Editor {
                 legend: self.export_legend,
                 transparent: self.export_transparent,
             });
+        }
+        if self.exporting {
+            cards::muted(ui, p, tr!("combat-editor-exporting"));
         }
         ui.add_space(10.0);
         // the file

@@ -13364,6 +13364,7 @@ combat-editor-export-help = Enregistre le relief, les marqueurs, une légende de
 combat-editor-export-with-title = Nom de la région et de l’ensemble
 combat-editor-export-with-legend = Légende des épingles
 combat-editor-export-image = Enregistrer l’image…
+combat-editor-exporting = Enregistrement de l’image…
 combat-export-legend = Légende
 combat-editor-file-title = Fichier d’ensemble
 combat-editor-file-help = Garde un ensemble entier, calques compris, dans un fichier, ou en importe un comme nouvel ensemble.

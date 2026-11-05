@@ -959,6 +959,9 @@ pub struct App {
     neighbours_refused: bool,
     /// The cache and transcript folders being chosen (app/folders.rs).
     folders: folders::Folders,
+    /// The picture of the annotated map being made on a worker
+    /// (app/map_export.rs): its message when it is done.
+    map_export: Option<std::sync::mpsc::Receiver<String>>,
     /// The settings backup being written or read (app/settings_backup.rs).
     settings_backup: settings_backup::Job,
     /// The stream list being exported or imported (app/stream_list.rs).
@@ -1711,6 +1714,7 @@ impl App {
             auto_away: false,
             neighbours_refused: false,
             folders: Default::default(),
+            map_export: None,
             settings_backup: Default::default(),
             stream_list: Default::default(),
             capture: std::env::var_os("AURORA_CAPTURE").map(|p| {
@@ -14470,6 +14474,7 @@ impl App {
         self.options_ui.chat_log_dir = self.world.chat_log.dir().map(std::path::Path::to_path_buf);
         self.options_ui.chat_log_custom = !self.settings.chat_log_location.is_empty();
         self.poll_folder_pick();
+        self.poll_map_export();
         self.poll_settings_backup();
         if let Some(done) = self.world.chat_log.take_relocated() {
             self.options_ui.chat_log_status = match done {
@@ -17260,6 +17265,7 @@ impl App {
                         );
                         self.combat_window.map_images(images);
                     }
+                    self.combat_window.set_exporting(self.map_export.is_some());
                     let result =
                         self.combat_window
                             .show(&ctx, &p, &mut self.settings, &self.world, &self.ui_images, &mut self.panels.combat);

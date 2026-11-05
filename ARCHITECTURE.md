@@ -1617,7 +1617,10 @@ opponent-record rules; `combat/journal.rs` keeps the full session in memory and 
 log on a background writer. `combat/tactical.rs` keeps the saved mini-map tool settings apart from the live
 `tactical::Session` (pings in flight and their queues, cooldowns and replay guards, marker set transfers, undo
 history, drawing and editing gestures), which one `reset` ends at logout and which never reaches the settings file.
-`combat/pings.rs` owns session-only version-4 Place/Contact/Acknowledge/Cancel
+`app/map_export.rs` saves the annotated map: the save dialog first, then
+copies of what the picture needs (`ui/minimap.rs` `ExportInputs`: the terrain, the objects already picked and
+coloured, the parcel overlays) go to a worker that rasterises, renders the markers (`combat/export.rs`) and writes
+the PNG, while the editor's button waits for its word. `combat/pings.rs` owns session-only version-4 Place/Contact/Acknowledge/Cancel
 messages with authenticated sender binding, replay guards and out-of-order control; `combat/{ping_ui,navigation}.rs`
 provide the native four-sector hold wheel and off-camera edge guidance; `combat/{sets,transfer}.rs` own
 region/grid-scoped annotation sets and bounded multipart sharing. The reward studio shares its presentation
