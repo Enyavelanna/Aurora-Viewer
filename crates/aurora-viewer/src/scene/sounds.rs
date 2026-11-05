@@ -607,7 +607,7 @@ impl SoundManager {
             .flatten()
             .chain(self.triggered.iter().map(|t| t.sound))
             .chain(self.previews.keys().copied())
-            .chain(self.ui_pending.iter().map(|(id, _)| *id))
+            .chain(self.ui_pending.iter().map(|(id, _, _)| *id))
             .collect();
         let mut idle: Vec<(u64, Uuid, usize)> = self
             .clips
