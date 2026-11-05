@@ -127,15 +127,25 @@ impl RegionSets {
         self.sets.iter().find(|s| Some(s.id) == self.active)
     }
 
-    pub fn save(&mut self, markers: &[Marker]) {
-        if let Some(set) = self.sets.iter_mut().find(|s| Some(s.id) == self.active) {
-            set.markers = markers.to_vec();
+    /// Writes `markers` into the active set; true when the set changed.
+    pub fn save(&mut self, markers: &[Marker]) -> bool {
+        match self.sets.iter_mut().find(|s| Some(s.id) == self.active) {
+            Some(set) if set.markers != markers => {
+                set.markers = markers.to_vec();
+                true
+            }
+            _ => false,
         }
     }
 
-    pub fn save_layers(&mut self, layers: &[Layer]) {
-        if let Some(set) = self.sets.iter_mut().find(|s| Some(s.id) == self.active) {
-            set.layers = layers.to_vec();
+    /// Writes `layers` into the active set; true when the set changed.
+    pub fn save_layers(&mut self, layers: &[Layer]) -> bool {
+        match self.sets.iter_mut().find(|s| Some(s.id) == self.active) {
+            Some(set) if set.layers != layers => {
+                set.layers = layers.to_vec();
+                true
+            }
+            _ => false,
         }
     }
 

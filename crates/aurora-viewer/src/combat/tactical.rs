@@ -191,6 +191,11 @@ pub(crate) struct Session {
     pub draw: Option<Shape>,
     pub drawing_start: Option<[f64; 3]>,
     pub capture_key: bool,
+    /// A saved Combat setting changed since the settings file was last
+    /// written: the once-a-second tick of the frame saves and clears it. Set
+    /// by the Combat window's tabs, the library (`store_set`, `import_set`,
+    /// `sets_panel`), the editor's map view and the mini-map's menu.
+    pub unsaved: bool,
 }
 impl Clone for Session {
     fn clone(&self) -> Self {
@@ -204,9 +209,13 @@ impl PartialEq for Session {
 }
 impl Session {
     /// Everything back to the start: the logout. A drag under way is put
-    /// back by `Settings::reset_session`, which calls this.
+    /// back by `Settings::reset_session`, which calls this. What is still
+    /// to be saved stays so.
     pub fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            unsaved: self.unsaved,
+            ..Self::default()
+        };
     }
     /// The placements and controls waiting to go out, when pings stop being
     /// shared: a ping queued for the others stays as a local one.
@@ -755,6 +764,10 @@ impl Settings {
     pub fn available(&self) -> bool {
         self.tools_enabled && self.combat_enabled
     }
+    /// A saved setting changed: the next tick writes the settings file.
+    pub fn mark_unsaved(&mut self) {
+        self.session.unsaved = true;
+    }
     pub fn layer_visible(&self, m: &Marker) -> bool {
         self.layers.get(usize::from(m.style.layer)).is_none_or(|l| l.visible)
     }
@@ -894,6 +907,7 @@ impl Settings {
         let set = region.selected().cloned();
         self.adopt(set.as_ref());
         self.sync_history();
+        self.session.unsaved = true;
         true
     }
     /// The active set's name in this region.
@@ -984,21 +998,29 @@ impl Settings {
     /// Writes the working copy into the current region's active set. A
     /// region without an entry gets one, with a default set, as soon as
     /// the working copy holds something (a marker, or layers that are not
-    /// the default ones); untouched, it stays out of the library.
+    /// the default ones); untouched, it stays out of the library. The
+    /// library is marked unsaved only when the set really changed: the
+    /// save tick calls this every second.
     fn store_set(&mut self) {
         let Some(key) = self.current_region.clone() else {
             return;
         };
         let used = !self.markers.is_empty() || self.layers != Layer::defaults();
-        if !used && !self.library.regions.iter().any(|r| r.key == key) {
+        let known = self.library.regions.iter().any(|r| r.key == key);
+        if !used && !known {
             return;
         }
         let region = self.library.region_mut(&key, &self.current_region_name);
+        let mut changed = !known;
         if region.active.is_none() && used {
             region.add(tr!("tactical-set-default").into(), &self.markers);
+            changed = true;
         }
-        region.save(&self.markers);
-        region.save_layers(&self.layers);
+        changed |= region.save(&self.markers);
+        changed |= region.save_layers(&self.layers);
+        if changed {
+            self.session.unsaved = true;
+        }
     }
 
     pub fn add_marker(&mut self, position: [f64; 3]) {
@@ -1530,11 +1552,13 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
         return;
     };
     cfg.save_set();
+    let mut changed = false;
     let region = cfg.library.region_mut(&key, &cfg.current_region_name);
     // a fresh region shows its default set, created here on first use
     if region.sets.is_empty() {
         region.add(tr!("tactical-set-default").into(), &cfg.markers);
         region.save_layers(&cfg.layers);
+        changed = true;
     }
     let previous = region.active;
     egui::ComboBox::from_id_salt("combat-set")
@@ -1545,25 +1569,28 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
             }
         });
     if let Some(set) = region.sets.iter_mut().find(|s| Some(s.id) == region.active) {
-        ui.text_edit_singleline(&mut set.name);
+        changed |= ui.text_edit_singleline(&mut set.name).changed();
     }
     ui.horizontal_wrapped(|ui| {
         let size = egui::vec2(0.0, 26.0);
         let flat = widgets::ActionKind::Flat;
         if widgets::action_button(ui, p, "plus", tr!("tactical-set-new"), flat, size).clicked() {
             region.add(tr!("tactical-set-default").into(), &[]);
+            changed = true;
         }
         if widgets::action_button(ui, p, "copy-filled", tr!("tactical-set-duplicate"), flat, size).clicked() {
             let name = region.selected().map(|s| s.name.clone()).unwrap_or_default();
             region.add(name, &cfg.markers);
             region.save_layers(&cfg.layers);
+            changed = true;
         }
         if widgets::action_button(ui, p, "trash-filled", tr!("tactical-remove"), widgets::ActionKind::Danger, size).clicked() {
             region.remove_active();
+            changed = true;
         }
         if widgets::action_button(ui, p, "device-floppy-filled", tr!("tactical-set-save"), flat, size).clicked() {
-            region.save(&cfg.markers);
-            region.save_layers(&cfg.layers);
+            changed |= region.save(&cfg.markers);
+            changed |= region.save_layers(&cfg.layers);
         }
     });
     if region.active != previous {
@@ -1571,6 +1598,10 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
         cfg.adopt(set.as_ref());
         cfg.session.draw = None;
         cfg.session.drawing_start = None;
+        changed = true;
+    }
+    if changed {
+        cfg.session.unsaved = true;
     }
     if !cfg.library.unassigned.is_empty() {
         widgets::surface(ui, p, |ui| {
@@ -1590,6 +1621,7 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
                 region.add(tr!("tactical-set-unassigned").into(), &markers);
                 let set = region.selected().cloned();
                 cfg.adopt(set.as_ref());
+                cfg.session.unsaved = true;
             }
         });
     }
@@ -2058,6 +2090,58 @@ mod tests {
         assert!(cfg.session.last_ping.is_none() && cfg.session.sender_pings.is_empty() && cfg.session.seen_messages.is_empty());
         assert!(cfg.session.history.undo.is_empty() && !cfg.session.editing);
         assert_eq!(cfg.markers.len(), 1, "the working copy is not session state");
+    }
+
+    #[test]
+    fn the_library_is_marked_unsaved_only_when_a_set_really_changes() {
+        let mut cfg = Settings::default();
+        let key = super::super::sets::RegionKey {
+            grid: "g".into(),
+            region: 1,
+        };
+        cfg.enter_region(key.clone(), "R");
+        cfg.save_set();
+        assert!(!cfg.session.unsaved, "a region passed through changes nothing");
+        cfg.place_marker(Shape::Pin, [1.0, 2.0, 3.0]);
+        cfg.save_set();
+        assert!(
+            std::mem::take(&mut cfg.session.unsaved),
+            "the first marker creates the region's set"
+        );
+        cfg.save_set();
+        cfg.save_set();
+        assert!(!cfg.session.unsaved, "the save tick at rest marks nothing");
+        cfg.markers[0].position = [4.0, 5.0, 6.0];
+        cfg.save_set();
+        assert!(std::mem::take(&mut cfg.session.unsaved), "a moved marker is stored");
+        assert!(cfg.undo());
+        cfg.save_set();
+        assert!(std::mem::take(&mut cfg.session.unsaved), "an undo is stored");
+        assert!(cfg.redo());
+        cfg.save_set();
+        assert!(std::mem::take(&mut cfg.session.unsaved), "a redo is stored");
+        cfg.layers[0].locked = true;
+        cfg.save_set();
+        assert!(std::mem::take(&mut cfg.session.unsaved), "a layer change is stored");
+        cfg.markers[0].name = "Spawn".into();
+        cfg.enter_region(
+            super::super::sets::RegionKey {
+                grid: "g".into(),
+                region: 2,
+            },
+            "S",
+        );
+        assert!(std::mem::take(&mut cfg.session.unsaved), "leaving a region stores its set");
+        cfg.save_set();
+        assert!(!cfg.session.unsaved);
+        let file = super::super::sets::SetFile::new("Imported".into(), Vec::new(), cfg.markers.clone());
+        assert!(cfg.import_set(file));
+        assert!(std::mem::take(&mut cfg.session.unsaved), "an import is a new set");
+        cfg.session.reset();
+        assert!(!cfg.session.unsaved);
+        cfg.mark_unsaved();
+        cfg.session.reset();
+        assert!(cfg.session.unsaved, "what was to be saved before a logout still is");
     }
 
     #[test]

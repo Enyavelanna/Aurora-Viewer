@@ -117,6 +117,8 @@ pub(crate) fn journal(ui: &mut egui::Ui, p: &Palette, world: &World, state: &mut
             }
         });
 }
+/// The kill feed and the medal banner over the world. True when a saved
+/// setting changed (the feed dragged to a new place).
 pub(crate) fn overlays(
     ctx: &egui::Context,
     p: &Palette,
@@ -126,12 +128,13 @@ pub(crate) fn overlays(
     allies: &std::collections::BTreeSet<Uuid>,
     ally_color: egui::Color32,
     images: &HashMap<Uuid, egui::TextureHandle>,
-) {
+) -> bool {
+    let mut changed = false;
     let now = Instant::now();
     state.sync_display(cfg);
     state.close_fight(now);
     if !cfg.enabled {
-        return;
+        return false;
     }
     let rect = ctx.content_rect();
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -180,6 +183,7 @@ pub(crate) fn overlays(
     }
     if let Some(position) = edit.position {
         cfg.feed_position = position;
+        changed = true;
     }
     if edit.done {
         cfg.feed_test = false;
@@ -240,6 +244,7 @@ pub(crate) fn overlays(
             });
         ctx.request_repaint();
     }
+    changed
 }
 /// The other medals the same kill earned, small, side by side under the banner.
 fn chips(ui: &mut egui::Ui, p: &Palette, cfg: &Settings, awards: &[super::awards::Award], scale: f32) {

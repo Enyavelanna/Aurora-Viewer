@@ -293,7 +293,8 @@ pub struct App {
     bridge_runtime: crate::world::bridge::Bridge,
     combat_subscription: Option<(uuid::Uuid, bool, Instant)>,
     tactical_press: Option<crate::combat::ping_ui::Press>,
-    combat_saved: (Instant, String),
+    /// The last Combat autosave tick.
+    combat_saved: Instant,
     native_anchor: crate::movement::movelock::Controller,
     anchor_stands: crate::ao::anchor::StandCheck,
     /// Keep the verified standing set through an asynchronous stand-up reply.
@@ -1306,7 +1307,7 @@ impl App {
             bridge_runtime: Default::default(),
             combat_subscription: None,
             tactical_press: None,
-            combat_saved: (Instant::now(), String::new()),
+            combat_saved: Instant::now(),
             native_anchor: Default::default(),
             anchor_stands: Default::default(),
             anchor_pose: None,
@@ -8524,17 +8525,15 @@ impl App {
             };
             self.settings.maps.tactical.enter_region(key, &self.world.region_name());
         }
-        if self.combat_saved.0.elapsed() >= Duration::from_secs(1) {
+        // Combat autosave: once a second, the working copy goes into its set
+        // and the file is written when a Combat setting was marked unsaved
+        // (the window close and the logout save on their own).
+        if self.combat_saved.elapsed() >= Duration::from_secs(1) {
             self.settings.maps.tactical.save_set();
-            if let Ok(document) = serde_json::to_string(&(&self.settings.combat, &self.settings.maps.tactical))
-                && document != self.combat_saved.1
-            {
-                self.combat_saved.1 = document;
-                if !self.demo {
-                    self.settings.save();
-                }
+            if std::mem::take(&mut self.settings.maps.tactical.session.unsaved) && !self.demo {
+                self.settings.save();
             }
-            self.combat_saved.0 = Instant::now();
+            self.combat_saved = Instant::now();
         }
         self.world.events_this_frame = 0;
         if self.demo && std::env::var_os("AURORA_DEMO_COMBAT").is_some() {
@@ -15696,7 +15695,7 @@ impl App {
                     Default::default()
                 };
                 let [ar, ag, ab, aa] = tactical.allies.color;
-                crate::combat::ui::overlays(
+                let feed_moved = crate::combat::ui::overlays(
                     &ctx,
                     &p,
                     &self.world,
@@ -15707,6 +15706,9 @@ impl App {
                     egui::Color32::from_rgba_unmultiplied(ar, ag, ab, aa),
                     &self.ui_images,
                 );
+                if feed_moved {
+                    self.settings.maps.tactical.mark_unsaved();
+                }
                 if let Some(press) = self.tactical_press
                     && press.wheel(self.settings.maps.tactical.hold_ms)
                 {
@@ -17261,6 +17263,9 @@ impl App {
                     let result =
                         self.combat_window
                             .show(&ctx, &p, &mut self.settings, &self.world, &self.ui_images, &mut self.panels.combat);
+                    if result.changed {
+                        self.settings.maps.tactical.mark_unsaved();
+                    }
                     // The Sharing tab shows who is in the active group.
                     if self.panels.combat && self.combat_window.tab == 6 {
                         self.world.group_data.ensure_members(self.world.groups.active);
@@ -20429,6 +20434,7 @@ impl ApplicationHandler for App {
                         self.settings.maps.tactical.session.capture_key = false;
                         if code != winit::keyboard::KeyCode::Escape {
                             self.settings.maps.tactical.key = format!("{code:?}");
+                            self.settings.maps.tactical.mark_unsaved();
                         }
                         return;
                     }

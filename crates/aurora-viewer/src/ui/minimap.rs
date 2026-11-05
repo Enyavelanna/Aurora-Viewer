@@ -1152,20 +1152,23 @@ impl MiniMap {
                         actions.push(MiniMapAction::OpenMarkerEditor);
                     }
                 }
-                menu::toggle(
+                let fixed = menu::toggle(
                     ui,
                     p,
                     "focus-centered",
                     aurora_i18n::tr!("tactical-fixed-center"),
                     &mut opts.tactical.fixed_center,
                 );
-                menu::toggle(
+                let rotate = menu::toggle(
                     ui,
                     p,
                     "compass-filled",
                     aurora_i18n::tr!("tactical-rotate-avatar"),
                     &mut opts.tactical.rotate_avatar,
                 );
+                if fixed || rotate {
+                    opts.tactical.mark_unsaved();
+                }
                 menu::separator(ui, p);
             }
             if let Some(&first) = avs.first() {
@@ -1308,8 +1311,9 @@ impl MiniMap {
                 true,
             ) {
                 opts.mini_rotate = false;
-                if opts.tactical.available() {
+                if opts.tactical.available() && opts.tactical.rotate_avatar {
                     opts.tactical.rotate_avatar = false;
+                    opts.tactical.mark_unsaved();
                 }
             }
             if menu::check(

@@ -782,9 +782,12 @@ impl Editor {
                 self.pan = Vec2::ZERO;
             }
             ui.add_space(8.0);
-            widgets::checkbox(ui, p, &mut cfg.map_view.objects, tr!("combat-editor-objects"));
-            widgets::checkbox(ui, p, &mut cfg.map_view.parcels, tr!("combat-editor-parcels"));
-            widgets::checkbox(ui, p, &mut cfg.map_view.grid, tr!("combat-editor-grid"));
+            let view = widgets::checkbox(ui, p, &mut cfg.map_view.objects, tr!("combat-editor-objects")).changed()
+                | widgets::checkbox(ui, p, &mut cfg.map_view.parcels, tr!("combat-editor-parcels")).changed()
+                | widgets::checkbox(ui, p, &mut cfg.map_view.grid, tr!("combat-editor-grid")).changed();
+            if view {
+                cfg.mark_unsaved();
+            }
             widgets::checkbox(ui, p, &mut self.snap_grid, tr!("combat-editor-snap"));
             widgets::checkbox(ui, p, &mut self.snap_objects, tr!("combat-editor-snap-objects"));
             if self.spacing < 1.0 {
@@ -2188,8 +2191,10 @@ impl Editor {
             ],
         ) {
             cfg.map_view = MapView::preset(preset, cfg.map_view.grid);
+            cfg.mark_unsaved();
         }
         ui.add_space(8.0);
+        let mut changed = false;
         let view = &mut cfg.map_view;
         let mut flat = usize::from(view.ground == Ground::Flat);
         ui.label(egui::RichText::new(tr!("combat-map-ground")).color(p.ink));
@@ -2200,27 +2205,32 @@ impl Editor {
             &[(tr!("combat-map-ground-shaded"), false), (tr!("combat-map-ground-flat"), false)],
         ) {
             view.ground = if flat == 1 { Ground::Flat } else { Ground::Shaded };
+            changed = true;
         }
         ui.add_space(4.0);
         let mut percent = (view.dim * 100.0).round() as u32;
         if cards::slider_row(ui, tr!("combat-map-dim"), tr!("combat-map-dim-help"), &mut percent, 20..=100, "%") {
             view.dim = percent as f32 / 100.0;
+            changed = true;
         }
-        cards::switch_row(
+        changed |= cards::switch_row(
             ui,
             p,
             &mut view.objects,
             tr!("combat-editor-objects"),
             tr!("combat-map-objects-help"),
         );
-        cards::switch_row(
+        changed |= cards::switch_row(
             ui,
             p,
             &mut view.parcels,
             tr!("combat-editor-parcels"),
             tr!("combat-map-parcels-help"),
         );
-        cards::switch_row(ui, p, &mut view.grid, tr!("combat-editor-grid"), "");
+        changed |= cards::switch_row(ui, p, &mut view.grid, tr!("combat-editor-grid"), "");
+        if changed {
+            cfg.mark_unsaved();
+        }
     }
 
     fn set_panel(&mut self, ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
