@@ -76,7 +76,6 @@ pub(crate) fn show(
     result: &mut options::OptionsResult,
 ) -> bool {
     let awards = Award::ALL;
-    cfg.migrate_rewards();
     state.combat_reward_selected = state.combat_reward_selected.min(awards.len() - 1);
     let mut changed = false;
     let selected = awards[state.combat_reward_selected];
