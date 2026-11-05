@@ -54,12 +54,22 @@ Mark contacts, objectives, and regroup points without leaving mouselook. The pin
 ## Features
 
 ### Combat Feedback
+
+<p align="center">
+  <img src="docs/screenshots/combat-kill-feed.gif" alt="Kill feed in the compact style, with medals and friendly fire, dragged into place in test mode" width="60%">
+</p>
+
 - **Kill Marker** — Customizable on-screen kill confirmation.
 - **Kill Sound** — Custom sound support using SL asset UUIDs.
 - **Kill Feed** — On-screen list of recent eliminations.
 - **Combat Events** — Tracks kills, deaths, suicides and environmental deaths.
 
 ### Awards & Medals
+
+<p align="center">
+  <img src="docs/screenshots/combat-awards.gif" alt="Award Studio: medal families, settings and the medal banner" width="80%">
+</p>
+
 - **Combos** — Double, Triple, Quadruple and Pentakill: kills less than 5 seconds apart.
 - **Streaks** — 10, 20, 30 and 50 kills without dying.
 - **Events** — Revenge, Domination, and Shutdown when you end someone's streak of 5 kills or more.
@@ -75,6 +85,11 @@ Mark contacts, objectives, and regroup points without leaving mouselook. The pin
 - **Fight recaps** — kills, deaths, best streak and medals once a fight is over.
 
 ### Tactical Pings
+
+<p align="center">
+  <img src="docs/screenshots/combat-ping-wheel.gif" alt="Ping wheel opened in mouselook" width="60%">
+</p>
+
 - **Quick Ping** from crosshair or aim position.
 - **Ping Wheel** with Contact, Objective, Help / Regroup and default Ping.
 - **Acknowledgements** such as *On my way*.
@@ -87,12 +102,21 @@ Mark contacts, objectives, and regroup points without leaving mouselook. The pin
 - **Own colour on the minimap** (configurable), with an optional ring.
 
 ### Tactical Mapping
+
+<p align="center">
+  <img src="docs/screenshots/combat-editor.gif" alt="Region marker editor opened from the Marker sets tab, with the map objects shown" width="100%">
+</p>
+
 - **Combat Minimap** with persistent markers and direct editing.
 - **Region Marker Editor** with pins, circles, rectangles, polygons, arrows, routes, text and freehand tools.
 - **Layers, snapping, presets and undo/redo**.
 - **Map tab** — Tactical, Detailed and Clean looks, plain or terrain ground, ground brightness, objects, parcel lines and grid.
 - **JSON set import/export**, optionally with the map look.
 - **PNG map export** for sharing annotated maps.
+
+<p align="center">
+  <img src="docs/screenshots/combat-minimap.gif" alt="Mini-map right-click menu with the Combat entries first" width="50%">
+</p>
 
 ### Additional Features
 - **Zoomed Aim Sensitivity** in mouselook.
