@@ -859,6 +859,10 @@ pub struct Settings {
     pub log_show_history: bool,
     /// Date in the names of these files (LogFileNamewithDate, off).
     pub log_dated_names: bool,
+    /// Import the Legacy Viewer's transcripts at each login. On by default
+    /// (an Aurora addition): moving between the two viewers keeps the
+    /// history, and a notice says what came in.
+    pub log_import_at_login: bool,
     /// Ask before opening a web link outside the trusted domains (the box
     /// "Do not warn me again" of the warning turns it off).
     pub warn_external_links: bool,
@@ -1424,7 +1428,7 @@ pub(crate) fn max_texture_resolution_choice(v: u32) -> u32 {
         .unwrap_or(MAX_TEXTURE_RESOLUTIONS[0])
 }
 
-const SETTINGS_VERSION: u32 = 31;
+const SETTINGS_VERSION: u32 = 32;
 
 /// `settings.json` from a newer build: the document, what this build loaded
 /// from it, and the top-level keys to leave as they were unless changed here
@@ -1917,6 +1921,7 @@ impl Default for Settings {
             reopen_ims: false,
             log_show_history: true,
             log_dated_names: false,
+            log_import_at_login: true,
             warn_external_links: true,
             trusted_sites: Default::default(),
             mute_all_groups: false,
@@ -2635,6 +2640,14 @@ impl Settings {
             // any other keeps 2048
             crate::graphics_presets::upgrade_max_texture_resolution(&mut self);
         }
+        if self.settings_version < 32 {
+            // the head turns toward the cursor's side by default, like the
+            // Legacy Viewer, instead of looking at the point under it, which
+            // everyone nearby saw. Every earlier file wrote the former
+            // default, Point: once to Direction, Preferences › Aurora keeps
+            // Point as a choice
+            self.lookat.aim = crate::world::lookat::Aim::Direction;
+        }
         if !self.audio.mic_gain.is_finite() {
             self.audio.mic_gain = 1.0;
         }
@@ -3127,6 +3140,17 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(disabled.render_settings().projector_shadow_limit, 0);
+    }
+
+    #[test]
+    fn legacy_chat_import_at_login_defaults_on_and_keeps_a_saved_off() {
+        use super::Settings;
+        assert!(Settings::default().log_import_at_login);
+        // preferences saved before the setting existed
+        let old: Settings = serde_json::from_str("{}").expect("older preferences");
+        assert!(old.log_import_at_login);
+        let off: Settings = serde_json::from_str(r#"{"log_import_at_login":false}"#).expect("preferences");
+        assert!(!off.log_import_at_login);
     }
 
     #[test]
@@ -3715,6 +3739,26 @@ mod tests {
             ..Settings::default()
         };
         assert!(chosen.sanitized().show_perf);
+    }
+
+    /// The head turns toward the cursor's side by default; earlier files all
+    /// held the former default, the point under the cursor, and move once;
+    /// a later choice of the point stays.
+    #[test]
+    fn gaze_follows_the_cursor_side_by_default_and_once_for_earlier_files() {
+        use crate::world::lookat::Aim;
+        assert_eq!(Settings::default().sanitized().lookat.aim, Aim::Direction);
+        let mut old = Settings {
+            settings_version: 31,
+            ..Settings::default()
+        };
+        old.lookat.aim = Aim::Point;
+        assert_eq!(old.sanitized().lookat.aim, Aim::Direction);
+        let mut chosen = Settings::default();
+        chosen.lookat.aim = Aim::Point;
+        let chosen = chosen.sanitized();
+        assert_eq!(chosen.lookat.aim, Aim::Point);
+        assert_eq!(chosen.sanitized().lookat.aim, Aim::Point, "migrated only once");
     }
 
     /// The rez effect is the default; earlier files all held the former
