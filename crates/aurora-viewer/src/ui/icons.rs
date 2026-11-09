@@ -260,6 +260,7 @@ const FILLED: &[(&str, &[u8])] = svg_list!(
     "calendar",
     "calendar-event",
     "camera",
+    "car",
     "caret-down",
     "caret-left",
     "caret-right",
