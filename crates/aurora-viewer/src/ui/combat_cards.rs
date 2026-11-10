@@ -98,7 +98,7 @@ pub(crate) fn badge(ui: &mut egui::Ui, p: &Palette, text: &str, color: Color32) 
 }
 
 /// A switch shown as a pill with a state dot (Sending, Receiving).
-pub(crate) fn pill(ui: &mut egui::Ui, p: &Palette, on: &mut bool, text: &str, tip: &str) {
+pub(crate) fn pill(ui: &mut egui::Ui, p: &Palette, on: &mut bool, text: &str, tip: &str) -> bool {
     let color = if *on { p.success } else { p.muted_dim };
     let font = egui::TextStyle::Button.resolve(ui.style());
     let galley = ui
@@ -120,6 +120,7 @@ pub(crate) fn pill(ui: &mut egui::Ui, p: &Palette, on: &mut bool, text: &str, ti
     if resp.clicked() {
         *on = !*on;
     }
+    resp.clicked()
 }
 
 /// A small heading that splits a long card into groups.

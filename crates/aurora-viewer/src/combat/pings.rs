@@ -70,10 +70,11 @@ impl Settings {
         if !self.double_tap {
             return None;
         }
-        self.last_tap
+        self.session
+            .last_tap
             .filter(|(_, at)| now.saturating_duration_since(*at).as_millis() <= 350)
             .map(|(id, _)| id)
-            .filter(|id| self.pings.iter().any(|p| p.own() && p.marker.id == *id))
+            .filter(|id| self.session.pings.iter().any(|p| p.own() && p.marker.id == *id))
     }
 
     pub fn tap(&mut self, position: Option<[f64; 3]>, contact: bool, upgrade: Option<Uuid>, now: Instant) -> bool {
@@ -81,7 +82,7 @@ impl Settings {
             return false;
         }
         if let Some(id) = upgrade {
-            let Some(ping) = self.pings.iter_mut().find(|p| {
+            let Some(ping) = self.session.pings.iter_mut().find(|p| {
                 p.own() && p.marker.id == id && now.saturating_duration_since(p.at).as_secs_f32() < self.seconds.clamp(1.0, 60.0)
             }) else {
                 return false;
@@ -93,11 +94,11 @@ impl Settings {
                 return false;
             }
             if self.share && self.send_enabled && !ping.recipients.is_empty() {
-                if self.ping_controls.len() >= 64 {
-                    self.share_error = true;
+                if self.session.ping_controls.len() >= 64 {
+                    self.session.share_error = true;
                     return false;
                 }
-                self.ping_controls.push_back(Outbound {
+                self.session.ping_controls.push_back(Outbound {
                     targets: ping.recipients.iter().copied().collect(),
                     message: Message::new(Action::Contact { id }),
                     at: now,
@@ -106,19 +107,19 @@ impl Settings {
             ping.kind = 1;
             ping.marker.name = super::tactical::kind_name(1).into();
             ping.marker.color = self.colors[1];
-            for (marker, kind) in &mut self.outgoing {
+            for (marker, kind) in &mut self.session.outgoing {
                 if marker.id == id {
                     *marker = ping.marker.clone();
                     *kind = 1;
                 }
             }
-            self.last_tap = None;
+            self.session.last_tap = None;
             return true;
         }
         if let Some(position) = position
             && self.ping_at(position, usize::from(contact && self.auto_contact), now)
         {
-            self.last_tap = self.pings.last().map(|p| (p.marker.id, now));
+            self.session.last_tap = self.session.pings.last().map(|p| (p.marker.id, now));
             true
         } else {
             false
@@ -126,7 +127,8 @@ impl Settings {
     }
 
     pub fn cooldown(&self, now: Instant) -> f32 {
-        self.last_ping
+        self.session
+            .last_ping
             .map_or(0.0, |at| (3.0 - now.saturating_duration_since(at).as_secs_f32()).max(0.0))
     }
 
@@ -135,43 +137,44 @@ impl Settings {
             return false;
         }
         let Some(index) = self
+            .session
             .pings
             .iter()
             .position(|p| p.marker.id == id && now.saturating_duration_since(p.at).as_secs_f32() < self.seconds.clamp(1.0, 60.0))
         else {
             return false;
         };
-        let ping = &self.pings[index];
+        let ping = &self.session.pings[index];
         if ping.own() {
             // Removing a queued placement prevents a later send resurrecting it.
-            self.outgoing.retain(|(m, _)| m.id != id);
+            self.session.outgoing.retain(|(m, _)| m.id != id);
             if self.share && self.send_enabled && !ping.recipients.is_empty() {
-                if self.ping_controls.len() >= 64 {
-                    self.share_error = true;
+                if self.session.ping_controls.len() >= 64 {
+                    self.session.share_error = true;
                     return false;
                 }
-                self.ping_controls.push_back(Outbound {
+                self.session.ping_controls.push_back(Outbound {
                     targets: ping.recipients.iter().copied().collect(),
                     message: Message::new(Action::Cancel { id }),
                     at: now,
                 });
             }
-            self.pings.remove(index);
+            self.session.pings.remove(index);
             return true;
         }
         if !self.share || !self.send_enabled || ping.acknowledged {
             return false;
         }
-        if self.ping_controls.len() >= 64 {
-            self.share_error = true;
+        if self.session.ping_controls.len() >= 64 {
+            self.session.share_error = true;
             return false;
         }
-        self.ping_controls.push_back(Outbound {
+        self.session.ping_controls.push_back(Outbound {
             targets: vec![ping.sender],
             message: Message::new(Action::Acknowledge { id }),
             at: now,
         });
-        self.pings[index].acknowledged = true;
+        self.session.pings[index].acknowledged = true;
         true
     }
 
@@ -183,10 +186,10 @@ impl Settings {
         }
         match message.action {
             Action::Place { id, position, kind } => {
-                if id.is_nil() || kind >= 4 || self.cancelled_pings.contains_key(&(sender, id)) {
+                if id.is_nil() || kind >= 4 || self.session.cancelled_pings.contains_key(&(sender, id)) {
                     return false;
                 }
-                let kind = if self.pending_contacts.remove(&(sender, id)).is_some() {
+                let kind = if self.session.pending_contacts.remove(&(sender, id)).is_some() {
                     1
                 } else {
                     kind
@@ -202,6 +205,7 @@ impl Settings {
             }
             Action::Acknowledge { id } => {
                 let Some(ping) = self
+                    .session
                     .pings
                     .iter_mut()
                     .find(|p| p.own() && p.marker.id == id && p.recipients.contains(&sender))
@@ -211,24 +215,24 @@ impl Settings {
                 now.saturating_duration_since(ping.at).as_secs_f32() < self.seconds.clamp(1.0, 60.0) && ping.responders.insert(sender)
             }
             Action::Cancel { id } => {
-                if id.is_nil() || self.cancelled_pings.contains_key(&(sender, id)) {
+                if id.is_nil() || self.session.cancelled_pings.contains_key(&(sender, id)) {
                     return false;
                 }
-                if self.cancelled_pings.len() >= 512 {
-                    self.share_error = true;
+                if self.session.cancelled_pings.len() >= 512 {
+                    self.session.share_error = true;
                     return false;
                 }
                 // Even an out-of-order cancel prevents that owner's late place.
-                self.cancelled_pings.insert((sender, id), now);
-                self.pings.retain(|p| p.sender != sender || p.marker.id != id);
-                self.pending_contacts.remove(&(sender, id));
+                self.session.cancelled_pings.insert((sender, id), now);
+                self.session.pings.retain(|p| p.sender != sender || p.marker.id != id);
+                self.session.pending_contacts.remove(&(sender, id));
                 true
             }
             Action::Contact { id } => {
-                if id.is_nil() || self.cancelled_pings.contains_key(&(sender, id)) {
+                if id.is_nil() || self.session.cancelled_pings.contains_key(&(sender, id)) {
                     return false;
                 }
-                if let Some(ping) = self.pings.iter_mut().find(|p| p.sender == sender && p.marker.id == id) {
+                if let Some(ping) = self.session.pings.iter_mut().find(|p| p.sender == sender && p.marker.id == id) {
                     if ping.kind != 0 || now.saturating_duration_since(ping.at).as_secs_f32() >= self.seconds.clamp(1.0, 60.0) {
                         return false;
                     }
@@ -236,8 +240,8 @@ impl Settings {
                     ping.marker.name = super::tactical::kind_name(1).into();
                     ping.marker.color = self.colors[1];
                     true
-                } else if self.pending_contacts.len() < 128 && !self.seen_messages.contains_key(&id) {
-                    self.pending_contacts.insert((sender, id), now).is_none()
+                } else if self.session.pending_contacts.len() < 128 && !self.session.seen_messages.contains_key(&id) {
+                    self.session.pending_contacts.insert((sender, id), now).is_none()
                 } else {
                     false
                 }
@@ -263,13 +267,13 @@ mod tests {
         let peer = Uuid::from_u128(1);
         let mut cfg = cfg();
         assert!(cfg.ping_at([1.0; 3], 0, now));
-        let id = cfg.pings[0].marker.id;
-        cfg.pings[0].recipients.insert(peer);
+        let id = cfg.session.pings[0].marker.id;
+        cfg.session.pings[0].recipients.insert(peer);
         let ack = Message::new(Action::Acknowledge { id });
         assert!(!cfg.accept_ping(Uuid::from_u128(2), ack.clone(), now));
         assert!(cfg.accept_ping(peer, ack.clone(), now));
         assert!(!cfg.accept_ping(peer, ack.clone(), now));
-        assert_eq!(cfg.pings[0].responders.len(), 1);
+        assert_eq!(cfg.session.pings[0].responders.len(), 1);
         assert!(!cfg.accept_ping(peer, ack, now + std::time::Duration::from_secs(9)));
     }
     #[test]
@@ -284,11 +288,11 @@ mod tests {
         });
         let mut cfg = cfg();
         assert!(cfg.accept_ping(owner, place.clone(), now));
-        assert_eq!(cfg.pings[0].sender, owner);
+        assert_eq!(cfg.session.pings[0].sender, owner);
         assert!(cfg.accept_ping(Uuid::from_u128(2), Message::new(Action::Cancel { id }), now));
-        assert_eq!(cfg.pings.len(), 1);
+        assert_eq!(cfg.session.pings.len(), 1);
         assert!(cfg.accept_ping(owner, Message::new(Action::Cancel { id }), now));
-        assert!(cfg.pings.is_empty());
+        assert!(cfg.session.pings.is_empty());
         assert!(!cfg.accept_ping(owner, place, now + std::time::Duration::from_secs(4)));
     }
     #[test]
@@ -308,12 +312,12 @@ mod tests {
         ));
         assert!(cfg.respond(id, now));
         assert!(!cfg.respond(id, now));
-        assert!(cfg.last_ping.is_none());
-        assert_eq!(cfg.ping_controls[0].targets, vec![owner]);
+        assert!(cfg.session.last_ping.is_none());
+        assert_eq!(cfg.session.ping_controls[0].targets, vec![owner]);
         assert!(cfg.ping_at([2.0; 3], 0, now));
-        let own = cfg.pings.last().unwrap().marker.id;
+        let own = cfg.session.pings.last().unwrap().marker.id;
         assert!(cfg.respond(own, now));
-        assert!(cfg.outgoing.is_empty());
+        assert!(cfg.session.outgoing.is_empty());
         assert_eq!(cfg.cooldown(now), 3.0);
     }
     #[test]
@@ -343,7 +347,7 @@ mod tests {
         let wire = serde_json::to_vec(&msg).unwrap();
         assert!(wire.len() <= 480);
         assert_eq!(serde_json::from_slice::<Message>(&wire).unwrap(), msg);
-        cfg.ping_controls.push_back(Outbound {
+        cfg.session.ping_controls.push_back(Outbound {
             targets: vec![peer],
             message: msg,
             at: now,
@@ -360,14 +364,14 @@ mod tests {
         assert!(cfg.tap(Some([1.0; 3]), false, None, now));
         let id = cfg.recent_tap(later).unwrap();
         assert!(cfg.tap(None, false, Some(id), later));
-        assert_eq!(cfg.pings.len(), 1);
-        assert_eq!(cfg.pings[0].kind, 1);
-        assert_eq!(cfg.pings[0].at, now);
-        assert_eq!(cfg.last_ping, Some(now));
-        assert_eq!(cfg.outgoing.len(), 1);
-        assert_eq!(cfg.outgoing[0].1, 1);
+        assert_eq!(cfg.session.pings.len(), 1);
+        assert_eq!(cfg.session.pings[0].kind, 1);
+        assert_eq!(cfg.session.pings[0].at, now);
+        assert_eq!(cfg.session.last_ping, Some(now));
+        assert_eq!(cfg.session.outgoing.len(), 1);
+        assert_eq!(cfg.session.outgoing[0].1, 1);
         assert!(!cfg.tap(Some([2.0; 3]), true, None, later));
-        assert_eq!(cfg.pings.len(), 1);
+        assert_eq!(cfg.session.pings.len(), 1);
         assert!(cfg.recent_tap(now + std::time::Duration::from_secs(1)).is_none());
     }
     #[test]
@@ -377,12 +381,12 @@ mod tests {
         let peer = Uuid::from_u128(2);
         let mut local = cfg();
         assert!(local.tap(Some([1.0; 3]), false, None, now));
-        let id = local.pings[0].marker.id;
-        local.outgoing.clear();
-        local.pings[0].recipients.insert(peer);
+        let id = local.session.pings[0].marker.id;
+        local.session.outgoing.clear();
+        local.session.pings[0].recipients.insert(peer);
         local.ping_audience = 0;
         assert!(local.tap(None, false, Some(id), now));
-        let control = local.ping_controls.pop_front().unwrap();
+        let control = local.session.ping_controls.pop_front().unwrap();
         assert_eq!(control.targets, vec![peer]);
         let mut remote = cfg();
         assert!(remote.accept_ping(sender, control.message.clone(), now));
@@ -395,10 +399,10 @@ mod tests {
             }),
             now
         ));
-        assert_eq!(remote.pings[0].kind, 1);
+        assert_eq!(remote.session.pings[0].kind, 1);
         assert!(!remote.accept_ping(sender, control.message, now));
-        assert_eq!(remote.pings.len(), 1);
-        assert_eq!(remote.pings[0].at, now);
+        assert_eq!(remote.session.pings.len(), 1);
+        assert_eq!(remote.session.pings[0].at, now);
     }
     #[test]
     fn contact_shortcuts_are_independent_and_preserve_legacy_settings() {
@@ -406,12 +410,12 @@ mod tests {
         let mut cfg: Settings = serde_json::from_str(r#"{"pings_enabled":true}"#).unwrap();
         assert!(cfg.auto_contact && cfg.double_tap);
         assert!(cfg.tap(Some([1.0; 3]), true, None, now));
-        assert_eq!(cfg.pings[0].kind, 1);
+        assert_eq!(cfg.session.pings[0].kind, 1);
         cfg.double_tap = false;
         assert!(cfg.recent_tap(now).is_none());
         cfg.auto_contact = false;
         assert!(cfg.tap(Some([2.0; 3]), true, None, now + std::time::Duration::from_secs(3)));
-        assert_eq!(cfg.pings[1].kind, 0);
+        assert_eq!(cfg.session.pings[1].kind, 0);
     }
     #[test]
     fn ping_controls_respect_independent_send_and_master_switches_and_queue_bounds() {
@@ -436,12 +440,12 @@ mod tests {
             message: Message::new(Action::Acknowledge { id }),
             at: now,
         };
-        cfg.ping_controls.extend(std::iter::repeat_n(packet, 64));
+        cfg.session.ping_controls.extend(std::iter::repeat_n(packet, 64));
         assert!(!cfg.respond(id, now));
-        assert!(!cfg.pings[0].acknowledged);
-        assert!(cfg.share_error);
-        cfg.ping_controls.clear();
-        cfg.combat_enabled = false;
+        assert!(!cfg.session.pings[0].acknowledged);
+        assert!(cfg.session.share_error);
+        cfg.session.ping_controls.clear();
+        cfg.session.combat_enabled = false;
         assert!(!cfg.respond(id, now));
         assert!(!cfg.tap(Some([2.0; 3]), true, None, now));
         assert!(!cfg.accept_ping(peer, Message::new(Action::Cancel { id }), now));

@@ -145,7 +145,7 @@ pub(super) fn show(ctx: &egui::Context, projector: &Projector, world: &World, cf
     let now = Instant::now();
     let mut groups: [Vec<Guide<'_>>; SECTORS] = std::array::from_fn(|_| Vec::new());
     let mut world_groups = Vec::new();
-    for ping in &cfg.pings {
+    for ping in &cfg.session.pings {
         let age = now.saturating_duration_since(ping.at).as_secs_f32();
         if age >= cfg.seconds.clamp(1.0, 60.0) {
             continue;
@@ -295,7 +295,7 @@ pub(super) fn aimed(ctx: &egui::Context, projector: &Projector, world: &World, c
     let mut nearest = None;
     let mut best = 22.0_f32;
     let mut displayed = Vec::new();
-    for ping in &cfg.pings {
+    for ping in &cfg.session.pings {
         if ping.at.elapsed().as_secs_f32() >= cfg.seconds.clamp(1.0, 60.0) {
             continue;
         }
@@ -377,7 +377,7 @@ mod tests {
         ping.sender = uuid::Uuid::from_u128(1);
         ping.acknowledged = true;
         let id = ping.marker.id;
-        cfg.pings.push(ping);
+        cfg.session.pings.push(ping);
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(
             egui::RawInput {
@@ -387,8 +387,8 @@ mod tests {
             |ui| {
                 assert_eq!(aimed(ui.ctx(), &projector(), &world, &cfg, true), Some(id));
                 assert!(!cfg.respond(id, Instant::now()));
-                assert!(cfg.last_ping.is_none());
-                assert_eq!(cfg.pings.len(), 1);
+                assert!(cfg.session.last_ping.is_none());
+                assert_eq!(cfg.session.pings.len(), 1);
             },
         );
     }

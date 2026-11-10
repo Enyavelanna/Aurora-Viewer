@@ -10,11 +10,14 @@ use aurora_i18n::tr;
 pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, r: &mut OptionsResult, tab: usize) -> bool {
     let d = Settings::default();
     let mut changed = false;
-    if !s.combat.enabled && tab != 6 {
+    // Sharing and Allies follow the same rule: each shows its own notice and
+    // disables itself when Combat or the map tools are off.
+    let own_notice = tab >= 6;
+    if !s.combat.enabled && !own_notice {
         notice(ui, p, tr!("combat-off-notice"));
         gap(ui);
     }
-    ui.add_enabled_ui(s.combat.enabled || tab == 6, |ui| {
+    ui.add_enabled_ui(s.combat.enabled || own_notice, |ui| {
         changed = match tab {
             0 => overview(ui, p, s, &d),
             1 => feedback(ui, p, s, &d),
@@ -412,13 +415,13 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                         let on = t.pings_enabled;
                         **changed |= under(ui, on, |ui| {
                             field_row(ui, tr!("ping-key"), tr!("tactical-key"), |ui| {
-                                let label = if t.capture_key {
+                                let label = if t.session.capture_key {
                                     tr!("ping-key-press").to_owned()
                                 } else {
                                     crate::keybinds::Input::Key(t.key.clone()).label()
                                 };
                                 if ui.button(label).clicked() {
-                                    t.capture_key = true;
+                                    t.session.capture_key = true;
                                 }
                                 false
                             });
@@ -517,8 +520,12 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                 }
             });
             gap(ui);
-            let remaining = t.last_ping.map(|at| (3.0 - at.elapsed().as_secs_f32()).max(0.0)).unwrap_or(0.0);
-            let active = t.pings.len();
+            let remaining = t
+                .session
+                .last_ping
+                .map(|at| (3.0 - at.elapsed().as_secs_f32()).max(0.0))
+                .unwrap_or(0.0);
+            let active = t.session.pings.len();
             let card = Card::new("history", tr!("ping-group-status"));
             let card = if active > 0 { card.badge(active.to_string()) } else { card };
             card.show(ui, p, |ui| {

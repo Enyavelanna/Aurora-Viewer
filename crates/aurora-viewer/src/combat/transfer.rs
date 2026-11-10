@@ -121,7 +121,7 @@ mod tests {
         for n in 0..40 {
             cfg.add_marker([n as f64, 2.0, 3.0]);
         }
-        let parts = encode(&SetFile::new("Objectives".into(), cfg.layers.clone(), cfg.markers.clone())).expect("encode");
+        let parts = encode(&SetFile::new("Objectives".into(), cfg.session.layers.clone(), cfg.markers.clone())).expect("encode");
         assert!(parts.len() > 1 && parts.iter().all(|p| p.len() <= 480));
         let sender = Uuid::new_v4();
         let now = Instant::now();
@@ -173,7 +173,7 @@ mod tests {
     fn the_old_transfer_format_is_not_taken_in() {
         let mut cfg = super::super::tactical::Settings::default();
         cfg.add_marker([1.0, 2.0, 3.0]);
-        let parts = encode(&SetFile::new("x".into(), cfg.layers.clone(), cfg.markers.clone())).expect("encode");
+        let parts = encode(&SetFile::new("x".into(), cfg.session.layers.clone(), cfg.markers.clone())).expect("encode");
         let mut inbox = Inbox::default();
         let sender = Uuid::new_v4();
         for part in &parts {
@@ -190,6 +190,6 @@ mod tests {
         let mut cfg = super::super::tactical::Settings::default();
         cfg.add_marker([1.0, 2.0, 3.0]);
         cfg.markers[0].style.layer = 6;
-        assert!(encode(&SetFile::new("x".into(), cfg.layers.clone(), cfg.markers.clone())).is_err());
+        assert!(encode(&SetFile::new("x".into(), cfg.session.layers.clone(), cfg.markers.clone())).is_err());
     }
 }

@@ -222,7 +222,7 @@ mod tests {
         let mut cfg = super::super::tactical::Settings::default();
         cfg.place_marker(super::super::tactical::Shape::Pin, [10.0, 20.0, 30.0]);
         cfg.markers[0].name = "Spawn".into();
-        let file = SetFile::new("Attack".into(), cfg.layers.clone(), cfg.markers.clone());
+        let file = SetFile::new("Attack".into(), cfg.session.layers.clone(), cfg.markers.clone());
         let pretty = file.to_file_bytes().expect("file");
         assert!(pretty.len() > file.to_bytes().expect("compact").len(), "a file is readable JSON");
         assert_eq!(SetFile::from_bytes(&pretty), Some(file.clone()));
@@ -267,7 +267,7 @@ mod tests {
         let theirs = cfg.markers[0].clone();
         let file = SetFile::new("Imported".into(), layers.clone(), vec![theirs.clone()]);
         assert!(cfg.import_set(file));
-        assert_eq!(cfg.layers, layers);
+        assert_eq!(cfg.session.layers, layers);
         assert_eq!(cfg.markers.len(), 1);
         assert_ne!(cfg.markers[0].id, theirs.id, "an import never overwrites by identity");
         assert_eq!(cfg.active_set_name(), "Imported");

@@ -389,13 +389,14 @@ impl Context {
             .recipients
             .keys()
             .chain(cfg.player_colors.keys())
-            .chain(cfg.inbox.senders.values())
+            .chain(cfg.session.inbox.senders.values())
             .map(|id| (*id, world.social.display_name_of(id)))
             .collect();
         Self {
             position: world.main_region.map(|_| me),
             groups: world.groups.groups.iter().map(|g| (g.id, g.name.clone())).collect(),
             identities: cfg
+                .session
                 .pings
                 .iter()
                 .flat_map(|p| std::iter::once(p.sender).chain(p.responders.iter().copied()))
@@ -500,14 +501,8 @@ impl MapView {
 pub(crate) struct Settings {
     pub library: super::sets::Library,
     pub current_region: Option<super::sets::RegionKey>,
-    /// The name of `current_region`, for the library entry the region gets
-    /// on first use: a region visited without placing anything has none.
-    #[serde(skip)]
-    pub current_region_name: String,
     pub enabled: bool,
     pub tools_enabled: bool,
-    #[serde(skip)]
-    pub combat_enabled: bool,
     pub rotate_avatar: bool,
     pub pings_enabled: bool,
     pub offscreen_pings: bool,
@@ -520,18 +515,10 @@ pub(crate) struct Settings {
     pub outline_width: f32,
     pub player_colors: BTreeMap<Uuid, [u8; 4]>,
     pub markers: Vec<Marker>,
-    /// The active set's layers (kept with the set, like `markers`).
-    #[serde(skip)]
-    pub layers: Vec<Layer>,
-    /// Undo and redo of the active set, shared by the editor and the minimap.
-    #[serde(skip)]
-    pub history: History,
     pub colors: [[u8; 4]; 4],
     pub icons: [String; 4],
     pub seconds: f32,
     pub key: String,
-    #[serde(skip)]
-    pub capture_key: bool,
     pub hold_ms: f32,
     pub auto_contact: bool,
     pub double_tap: bool,
@@ -540,15 +527,6 @@ pub(crate) struct Settings {
     pub send_enabled: bool,
     pub receive_enabled: bool,
     pub ping_audience: u8,
-    #[serde(skip)]
-    pub set_outgoing: std::collections::VecDeque<String>,
-    /// Parts queued since the queue was last empty (Sharing's progress).
-    #[serde(skip)]
-    pub set_total: usize,
-    #[serde(skip)]
-    pub last_set_send: Option<Instant>,
-    #[serde(skip)]
-    pub inbox: super::transfer::Inbox,
     pub share_group: bool,
     pub group_colors: BTreeMap<Uuid, [u8; 4]>,
     /// A colour per group title worn around you: the group of a resident is only known by it.
@@ -559,50 +537,19 @@ pub(crate) struct Settings {
     pub ping_sound: bool,
     pub sound_asset: String,
     pub sound_volume: f32,
-    #[serde(skip)]
-    pub pings: Vec<Ping>,
-    #[serde(skip)]
-    pub outgoing: Vec<(Marker, usize)>,
-    #[serde(skip)]
-    pub sound_pending: bool,
     pub fixed_center: bool,
     pub map_view: MapView,
+    /// The live session: nothing of it is saved.
     #[serde(skip)]
-    pub draw: Option<Shape>,
-    #[serde(skip)]
-    pub editing: bool,
-    #[serde(skip)]
-    pub edit_drag: Option<EditGesture>,
-    #[serde(skip)]
-    pub drawing_start: Option<[f64; 3]>,
-    #[serde(skip)]
-    pub last_ping: Option<Instant>,
-    #[serde(skip)]
-    pub sender_pings: BTreeMap<Uuid, Instant>,
-    #[serde(skip)]
-    pub seen_messages: BTreeMap<Uuid, Instant>,
-    #[serde(skip)]
-    pub share_error: bool,
-    #[serde(skip)]
-    pub ping_controls: std::collections::VecDeque<super::pings::Outbound>,
-    #[serde(skip)]
-    pub cancelled_pings: BTreeMap<(Uuid, Uuid), Instant>,
-    #[serde(skip)]
-    pub aimed_ping: Option<Uuid>,
-    #[serde(skip)]
-    pub last_tap: Option<(Uuid, Instant)>,
-    #[serde(skip)]
-    pub pending_contacts: BTreeMap<(Uuid, Uuid), Instant>,
+    pub session: Session,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             library: Default::default(),
             current_region: None,
-            current_region_name: String::new(),
             enabled: false,
             tools_enabled: true,
-            combat_enabled: true,
             rotate_avatar: true,
             pings_enabled: false,
             offscreen_pings: true,
@@ -615,13 +562,10 @@ impl Default for Settings {
             outline_width: 1.5,
             player_colors: BTreeMap::new(),
             markers: Vec::new(),
-            layers: Layer::defaults(),
-            history: History::default(),
             colors: [[90, 180, 255, 255], [255, 70, 70, 255], [255, 200, 60, 255], [80, 240, 160, 255]],
             icons: ["map-pin-filled", "user-filled", "map-pin-filled", "users-group"].map(str::to_owned),
             seconds: 8.0,
             key: "KeyB".into(),
-            capture_key: false,
             hold_ms: 250.0,
             auto_contact: true,
             double_tap: true,
@@ -630,10 +574,6 @@ impl Default for Settings {
             send_enabled: true,
             receive_enabled: true,
             ping_audience: 0,
-            set_outgoing: Default::default(),
-            set_total: 0,
-            last_set_send: None,
-            inbox: Default::default(),
             share_group: false,
             group_colors: BTreeMap::new(),
             title_colors: Vec::new(),
@@ -642,11 +582,62 @@ impl Default for Settings {
             ping_sound: false,
             sound_asset: String::new(),
             sound_volume: 0.7,
+            fixed_center: false,
+            map_view: MapView::default(),
+            session: Session::default(),
+        }
+    }
+}
+/// What `Settings` holds for the running session only: pings in flight,
+/// transfers, undo and drag state. None of it is saved.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Session {
+    /// The name of `current_region`, for the library entry the region gets
+    /// on first use: a region visited without placing anything has none.
+    pub current_region_name: String,
+    pub combat_enabled: bool,
+    /// The active set's layers (kept with the set, like `markers`).
+    pub layers: Vec<Layer>,
+    /// Undo and redo of the active set, shared by the editor and the minimap.
+    pub history: History,
+    pub capture_key: bool,
+    pub set_outgoing: std::collections::VecDeque<String>,
+    /// Parts queued since the queue was last empty (Sharing's progress).
+    pub set_total: usize,
+    pub last_set_send: Option<Instant>,
+    pub inbox: super::transfer::Inbox,
+    pub pings: Vec<Ping>,
+    pub outgoing: Vec<(Marker, usize)>,
+    pub sound_pending: bool,
+    pub draw: Option<Shape>,
+    pub editing: bool,
+    pub edit_drag: Option<EditGesture>,
+    pub drawing_start: Option<[f64; 3]>,
+    pub last_ping: Option<Instant>,
+    pub sender_pings: BTreeMap<Uuid, Instant>,
+    pub seen_messages: BTreeMap<Uuid, Instant>,
+    pub share_error: bool,
+    pub ping_controls: std::collections::VecDeque<super::pings::Outbound>,
+    pub cancelled_pings: BTreeMap<(Uuid, Uuid), Instant>,
+    pub aimed_ping: Option<Uuid>,
+    pub last_tap: Option<(Uuid, Instant)>,
+    pub pending_contacts: BTreeMap<(Uuid, Uuid), Instant>,
+}
+impl Default for Session {
+    fn default() -> Self {
+        Self {
+            current_region_name: String::new(),
+            combat_enabled: true,
+            layers: Layer::defaults(),
+            history: History::default(),
+            capture_key: false,
+            set_outgoing: Default::default(),
+            set_total: 0,
+            last_set_send: None,
+            inbox: Default::default(),
             pings: Vec::new(),
             outgoing: Vec::new(),
             sound_pending: false,
-            fixed_center: false,
-            map_view: MapView::default(),
             draw: None,
             editing: false,
             edit_drag: None,
@@ -660,6 +651,45 @@ impl Default for Settings {
             aimed_ping: None,
             last_tap: None,
             pending_contacts: Default::default(),
+        }
+    }
+}
+impl Session {
+    /// The live state that belongs to one region and one connection: what is
+    /// drawn, pinged, queued or received. The replay guards, the cooldown, the
+    /// undo history and the layers stay.
+    pub fn reset(&mut self) {
+        self.draw = None;
+        self.drawing_start = None;
+        self.pings.clear();
+        self.ping_controls.clear();
+        self.cancelled_pings.clear();
+        self.aimed_ping = None;
+        self.last_tap = None;
+        self.pending_contacts.clear();
+        self.outgoing.clear();
+        self.set_outgoing.clear();
+        self.inbox = Default::default();
+    }
+
+    /// Leaving the account: everything of `reset`, plus the cooldown and the
+    /// replay guards, which belong to the account that leaves.
+    pub fn sign_out(&mut self) {
+        self.reset();
+        self.last_ping = None;
+        self.sender_pings.clear();
+        self.seen_messages.clear();
+    }
+
+    /// Nothing more goes out: the queued ping messages are dropped and the
+    /// pings still waiting to be sent stay on this side only.
+    pub fn stop_sharing(&mut self) {
+        self.outgoing.clear();
+        self.ping_controls.clear();
+        for ping in &mut self.pings {
+            if ping.sharing == super::pings::ShareState::Queued {
+                ping.sharing = super::pings::ShareState::Local;
+            }
         }
     }
 }
@@ -706,28 +736,28 @@ pub(crate) fn world_overlay(
     cfg: &mut Settings,
     mouselook: bool,
 ) {
-    cfg.aimed_ping = None;
+    cfg.session.aimed_ping = None;
     if !cfg.available() || !cfg.pings_enabled {
         return;
     }
     super::navigation::show(ctx, projector, world, cfg, mouselook);
-    cfg.aimed_ping = super::navigation::aimed(ctx, projector, world, cfg, mouselook);
+    cfg.session.aimed_ping = super::navigation::aimed(ctx, projector, world, cfg, mouselook);
 }
 impl Settings {
     pub fn available(&self) -> bool {
-        self.tools_enabled && self.combat_enabled
+        self.tools_enabled && self.session.combat_enabled
     }
     pub fn layer_visible(&self, m: &Marker) -> bool {
-        self.layers.get(usize::from(m.style.layer)).is_none_or(|l| l.visible)
+        self.session.layers.get(usize::from(m.style.layer)).is_none_or(|l| l.visible)
     }
     pub fn layer_locked(&self, m: &Marker) -> bool {
-        self.layers.get(usize::from(m.style.layer)).is_some_and(|l| l.locked)
+        self.session.layers.get(usize::from(m.style.layer)).is_some_and(|l| l.locked)
     }
     /// Drops a drag under way, putting the markers back as they were.
     pub fn cancel_gesture(&mut self) {
-        if let Some(gesture) = self.edit_drag.take() {
+        if let Some(gesture) = self.session.edit_drag.take() {
             let before = gesture.before().clone();
-            (self.markers, self.layers) = (before.markers, before.layers);
+            (self.markers, self.session.layers) = (before.markers, before.layers);
         }
     }
     /// The next unused letter, then number, for a pin's badge.
@@ -780,7 +810,7 @@ impl Settings {
     }
     /// The markers to draw, back to front: by layer, then in the set's order.
     pub fn draw_order(&self) -> Vec<&Marker> {
-        let top = self.layers.len().saturating_sub(1);
+        let top = self.session.layers.len().saturating_sub(1);
         let mut shown: Vec<&Marker> = self.markers.iter().filter(|m| self.shown(m)).collect();
         shown.sort_by_key(|m| usize::from(m.style.layer).min(top));
         shown
@@ -788,7 +818,7 @@ impl Settings {
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             markers: self.markers.clone(),
-            layers: self.layers.clone(),
+            layers: self.session.layers.clone(),
         }
     }
     /// Starts a history for the set now active; an older one is dropped.
@@ -797,40 +827,40 @@ impl Settings {
             let active = self.library.regions.iter().find(|r| r.key == key).and_then(|r| r.active);
             (key, active)
         });
-        if self.history.of != of {
-            self.history = History { of, ..History::default() };
+        if self.session.history.of != of {
+            self.session.history = History { of, ..History::default() };
         }
     }
     /// Remembers `before`, the state a change started from.
     pub fn push_undo(&mut self, before: Snapshot) {
-        if self.history.undo.len() == UNDO_STEPS {
-            self.history.undo.remove(0);
+        if self.session.history.undo.len() == UNDO_STEPS {
+            self.session.history.undo.remove(0);
         }
-        self.history.undo.push(before);
-        self.history.redo.clear();
+        self.session.history.undo.push(before);
+        self.session.history.redo.clear();
     }
     pub fn undo(&mut self) -> bool {
-        let Some(previous) = self.history.undo.pop() else {
+        let Some(previous) = self.session.history.undo.pop() else {
             return false;
         };
         let now = self.snapshot();
-        self.history.redo.push(now);
-        (self.markers, self.layers) = (previous.markers, previous.layers);
+        self.session.history.redo.push(now);
+        (self.markers, self.session.layers) = (previous.markers, previous.layers);
         true
     }
     pub fn redo(&mut self) -> bool {
-        let Some(next) = self.history.redo.pop() else {
+        let Some(next) = self.session.history.redo.pop() else {
             return false;
         };
         let now = self.snapshot();
-        self.history.undo.push(now);
-        (self.markers, self.layers) = (next.markers, next.layers);
+        self.session.history.undo.push(now);
+        (self.markers, self.session.layers) = (next.markers, next.layers);
         true
     }
     /// Reads the active set of `region` into the working copy.
     pub(crate) fn adopt(&mut self, set: Option<&super::sets::MarkerSet>) {
         self.markers = set.map(|s| s.markers.clone()).unwrap_or_default();
-        self.layers = set
+        self.session.layers = set
             .map(|s| s.layers.clone())
             .filter(|l| !l.is_empty())
             .unwrap_or_else(Layer::defaults);
@@ -845,7 +875,7 @@ impl Settings {
         if let Some(view) = file.view {
             self.map_view = view.sane();
         }
-        let region = self.library.region_mut(&key, &self.current_region_name);
+        let region = self.library.region_mut(&key, &self.session.current_region_name);
         let name = if file.name.is_empty() {
             tr!("tactical-set-default").to_owned()
         } else {
@@ -874,17 +904,17 @@ impl Settings {
             return;
         }
         let markers = self.markers.iter().filter(|m| !selected_only || m.selected).cloned().collect();
-        let file = super::sets::SetFile::new(self.active_set_name(), self.layers.clone(), markers);
+        let file = super::sets::SetFile::new(self.active_set_name(), self.session.layers.clone(), markers);
         match super::transfer::encode(&file) {
-            Ok(chunks) if self.set_outgoing.len() + chunks.len() <= 512 => {
-                if self.set_outgoing.is_empty() {
-                    self.set_total = 0;
+            Ok(chunks) if self.session.set_outgoing.len() + chunks.len() <= 512 => {
+                if self.session.set_outgoing.is_empty() {
+                    self.session.set_total = 0;
                 }
-                self.set_total += chunks.len();
-                self.set_outgoing.extend(chunks);
-                self.share_error = false;
+                self.session.set_total += chunks.len();
+                self.session.set_outgoing.extend(chunks);
+                self.session.share_error = false;
             }
-            _ => self.share_error = true,
+            _ => self.session.share_error = true,
         }
     }
     /// Makes `key` the current region and reads its active set into the
@@ -897,7 +927,7 @@ impl Settings {
             return;
         }
         self.cancel_gesture();
-        self.editing = false;
+        self.session.editing = false;
         if self.current_region.is_some() {
             self.store_set();
             self.current_region = None;
@@ -913,22 +943,12 @@ impl Settings {
             .cloned();
         self.adopt(set.as_ref());
         self.current_region = Some(key);
-        self.current_region_name = name.to_owned();
-        self.draw = None;
-        self.drawing_start = None;
-        self.pings.clear();
-        self.ping_controls.clear();
-        self.cancelled_pings.clear();
-        self.aimed_ping = None;
-        self.last_tap = None;
-        self.pending_contacts.clear();
-        self.outgoing.clear();
-        self.set_outgoing.clear();
-        self.inbox = Default::default();
+        self.session.current_region_name = name.to_owned();
+        self.session.reset();
     }
 
     pub fn save_set(&mut self) {
-        if self.edit_drag.is_some() {
+        if self.session.edit_drag.is_some() {
             return;
         }
         self.store_set();
@@ -942,16 +962,16 @@ impl Settings {
         let Some(key) = self.current_region.clone() else {
             return;
         };
-        let used = !self.markers.is_empty() || self.layers != Layer::defaults();
+        let used = !self.markers.is_empty() || self.session.layers != Layer::defaults();
         if !used && !self.library.regions.iter().any(|r| r.key == key) {
             return;
         }
-        let region = self.library.region_mut(&key, &self.current_region_name);
+        let region = self.library.region_mut(&key, &self.session.current_region_name);
         if region.active.is_none() && used {
             region.add(tr!("tactical-set-default").into(), &self.markers);
         }
         region.save(&self.markers);
-        region.save_layers(&self.layers);
+        region.save_layers(&self.session.layers);
     }
 
     pub fn add_marker(&mut self, position: [f64; 3]) {
@@ -978,13 +998,14 @@ impl Settings {
             || kind >= 4
             || !position.iter().all(|v| v.is_finite() && v.abs() < 1e10)
             || self
+                .session
                 .last_ping
                 .is_some_and(|at| now.saturating_duration_since(at).as_secs_f32() < 3.0)
         {
             return false;
         }
-        self.last_ping = Some(now);
-        self.sound_pending = true;
+        self.session.last_ping = Some(now);
+        self.session.sound_pending = true;
         let marker = Marker {
             id: Uuid::new_v4(),
             name: kind_name(kind).into(),
@@ -996,44 +1017,45 @@ impl Settings {
             end: None,
             ..Marker::default()
         };
-        if self.share && self.send_enabled && self.ping_audience != 0 && self.outgoing.len() < 256 {
-            self.outgoing.push((marker.clone(), kind));
+        if self.share && self.send_enabled && self.ping_audience != 0 && self.session.outgoing.len() < 256 {
+            self.session.outgoing.push((marker.clone(), kind));
         }
-        if self.pings.len() >= 64 {
-            self.pings.remove(0);
+        if self.session.pings.len() >= 64 {
+            self.session.pings.remove(0);
         }
         let mut ping = Ping::new(marker, kind, now);
-        if self.outgoing.iter().any(|(m, _)| m.id == ping.marker.id) {
+        if self.session.outgoing.iter().any(|(m, _)| m.id == ping.marker.id) {
             ping.sharing = super::pings::ShareState::Queued;
         }
-        self.pings.push(ping);
+        self.session.pings.push(ping);
         true
     }
     /// A ping a peer placed: kept for its few seconds, at most one per peer
     /// every three seconds.
     pub fn accept_place(&mut self, sender: Uuid, marker: Marker, kind: usize, now: Instant) -> bool {
-        if sender.is_nil() || kind >= 4 || !marker.valid() || self.seen_messages.contains_key(&marker.id) || !self.pings_enabled {
+        if sender.is_nil() || kind >= 4 || !marker.valid() || self.session.seen_messages.contains_key(&marker.id) || !self.pings_enabled {
             return false;
         }
         if self
+            .session
             .sender_pings
             .get(&sender)
             .is_some_and(|at| now.saturating_duration_since(*at).as_secs_f32() < 3.0)
         {
             return false;
         }
-        if self.sender_pings.len() >= 512 && !self.sender_pings.contains_key(&sender) {
+        if self.session.sender_pings.len() >= 512 && !self.session.sender_pings.contains_key(&sender) {
             return false;
         }
-        self.sender_pings.insert(sender, now);
-        if self.pings.len() >= 64 {
-            self.pings.remove(0);
+        self.session.sender_pings.insert(sender, now);
+        if self.session.pings.len() >= 64 {
+            self.session.pings.remove(0);
         }
         let mut ping = Ping::new(marker.clone(), kind, now);
         ping.sender = sender;
-        self.pings.push(ping);
-        self.sound_pending = true;
-        self.seen_messages.insert(marker.id, now);
+        self.session.pings.push(ping);
+        self.session.sound_pending = true;
+        self.session.seen_messages.insert(marker.id, now);
         true
     }
     /// The colour given to a group title, whatever its case or spacing.
@@ -1073,13 +1095,15 @@ impl Settings {
         self.share_group = self.allies.active_group;
     }
     pub fn prune(&mut self) {
-        self.share_error |= self.inbox.expire(Instant::now());
-        self.pings.retain(|p| p.at.elapsed().as_secs_f32() < self.seconds.clamp(1.0, 60.0));
-        self.sender_pings.retain(|_, at| at.elapsed().as_secs() < 60);
-        self.seen_messages.retain(|_, at| at.elapsed().as_secs() < 120);
-        self.cancelled_pings.retain(|_, at| at.elapsed().as_secs() < 120);
-        self.pending_contacts.retain(|_, at| at.elapsed().as_secs() < 120);
-        self.ping_controls.retain(|p| p.at.elapsed().as_secs() < 60);
+        self.session.share_error |= self.session.inbox.expire(Instant::now());
+        self.session
+            .pings
+            .retain(|p| p.at.elapsed().as_secs_f32() < self.seconds.clamp(1.0, 60.0));
+        self.session.sender_pings.retain(|_, at| at.elapsed().as_secs() < 60);
+        self.session.seen_messages.retain(|_, at| at.elapsed().as_secs() < 120);
+        self.session.cancelled_pings.retain(|_, at| at.elapsed().as_secs() < 120);
+        self.session.pending_contacts.retain(|_, at| at.elapsed().as_secs() < 120);
+        self.session.ping_controls.retain(|p| p.at.elapsed().as_secs() < 60);
     }
     pub fn map(&self, painter: &egui::Painter, view: &View, world: &World) {
         if !self.available() {
@@ -1091,7 +1115,7 @@ impl Settings {
             }
         }
         if self.pings_enabled {
-            for ping in &self.pings {
+            for ping in &self.session.pings {
                 let mut marker = ping.marker.clone();
                 marker.name = format!("{} · {}", super::ping_ui::short_name(ping, world), kind_name(ping.kind));
                 if ping.acknowledged || !ping.responders.is_empty() {
@@ -1405,10 +1429,10 @@ pub(crate) fn distance_text(n: &Nearby) -> String {
 
 /// The markers' look on the map and the drawing tools (Marker sets tab).
 pub(crate) fn marker_display(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) -> bool {
-    let before = (cfg.editing, cfg.enabled, cfg.labels, cfg.size);
+    let before = (cfg.session.editing, cfg.enabled, cfg.labels, cfg.size);
     crate::ui::combat_cards::switch_row(ui, p, &mut cfg.enabled, tr!("tactical-markers"), "");
     crate::ui::combat_cards::switch_row(ui, p, &mut cfg.labels, tr!("tactical-labels"), "");
-    crate::ui::combat_cards::switch_row(ui, p, &mut cfg.editing, tr!("tactical-edit"), tr!("tactical-edit-help"));
+    crate::ui::combat_cards::switch_row(ui, p, &mut cfg.session.editing, tr!("tactical-edit"), tr!("tactical-edit-help"));
     crate::ui::combat_cards::slider_row(ui, tr!("combat-size"), "", &mut cfg.size, 3.0..=32.0, "");
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
@@ -1416,12 +1440,12 @@ pub(crate) fn marker_display(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings)
             let icon = crate::ui::combat_editor::shape_icon(shape);
             if widgets::action_button(ui, p, icon, shape.label(), widgets::ActionKind::Flat, egui::vec2(0.0, 26.0)).clicked() {
                 cfg.enabled = true;
-                cfg.draw = Some(shape);
-                cfg.drawing_start = None;
+                cfg.session.draw = Some(shape);
+                cfg.session.drawing_start = None;
             }
         }
     });
-    before != (cfg.editing, cfg.enabled, cfg.labels, cfg.size)
+    before != (cfg.session.editing, cfg.enabled, cfg.labels, cfg.size)
 }
 
 /// The markers of the active set, one line each: a tick to send it, its
@@ -1479,11 +1503,11 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
         return;
     };
     cfg.save_set();
-    let region = cfg.library.region_mut(&key, &cfg.current_region_name);
+    let region = cfg.library.region_mut(&key, &cfg.session.current_region_name);
     // a fresh region shows its default set, created here on first use
     if region.sets.is_empty() {
         region.add(tr!("tactical-set-default").into(), &cfg.markers);
-        region.save_layers(&cfg.layers);
+        region.save_layers(&cfg.session.layers);
     }
     let previous = region.active;
     egui::ComboBox::from_id_salt("combat-set")
@@ -1505,21 +1529,21 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
         if widgets::action_button(ui, p, "copy-filled", tr!("tactical-set-duplicate"), flat, size).clicked() {
             let name = region.selected().map(|s| s.name.clone()).unwrap_or_default();
             region.add(name, &cfg.markers);
-            region.save_layers(&cfg.layers);
+            region.save_layers(&cfg.session.layers);
         }
         if widgets::action_button(ui, p, "trash-filled", tr!("tactical-remove"), widgets::ActionKind::Danger, size).clicked() {
             region.remove_active();
         }
         if widgets::action_button(ui, p, "device-floppy-filled", tr!("tactical-set-save"), flat, size).clicked() {
             region.save(&cfg.markers);
-            region.save_layers(&cfg.layers);
+            region.save_layers(&cfg.session.layers);
         }
     });
     if region.active != previous {
         let set = region.selected().cloned();
         cfg.adopt(set.as_ref());
-        cfg.draw = None;
-        cfg.drawing_start = None;
+        cfg.session.draw = None;
+        cfg.session.drawing_start = None;
     }
     if !cfg.library.unassigned.is_empty() {
         widgets::surface(ui, p, |ui| {
@@ -1535,7 +1559,7 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
             .clicked()
             {
                 let markers = std::mem::take(&mut cfg.library.unassigned);
-                let region = cfg.library.region_mut(&key, &cfg.current_region_name);
+                let region = cfg.library.region_mut(&key, &cfg.session.current_region_name);
                 region.add(tr!("tactical-set-unassigned").into(), &markers);
                 let set = region.selected().cloned();
                 cfg.adopt(set.as_ref());
@@ -1629,7 +1653,7 @@ mod tests {
             assert!(!cfg.ping_at([1.0, 2.0, 3.0], kind, now + std::time::Duration::from_millis(2999)));
         }
         assert!(cfg.ping_at([1.0, 2.0, 3.0], 3, now + std::time::Duration::from_secs(3)));
-        assert_eq!(cfg.pings.len(), 2);
+        assert_eq!(cfg.session.pings.len(), 2);
     }
     #[test]
     fn combat_tactical_peer_cooldowns_do_not_block_other_peers_or_markers() {
@@ -1657,7 +1681,11 @@ mod tests {
         );
         assert!(cfg.accept_place(Uuid::from_u128(2), make(), 1, now), "another peer is not held");
         assert!(!cfg.accept_place(Uuid::from_u128(3), make(), 4, now), "a kind is one of four");
-        assert_eq!((cfg.pings.len(), cfg.markers.len()), (2, 0), "a peer cannot add markers to the set");
+        assert_eq!(
+            (cfg.session.pings.len(), cfg.markers.len()),
+            (2, 0),
+            "a peer cannot add markers to the set"
+        );
     }
     #[test]
     fn combat_tactical_old_circles_and_new_shapes_round_trip_without_session_state() {
@@ -1677,10 +1705,10 @@ mod tests {
             cfg.markers.push(m);
         }
         cfg.ping([1.0, 2.0, 3.0], 0);
-        cfg.draw = Some(Shape::Line);
+        cfg.session.draw = Some(Shape::Line);
         let reloaded: Settings = serde_json::from_str(&serde_json::to_string(&cfg).expect("settings")).expect("reload");
         assert_eq!(reloaded.markers, cfg.markers);
-        assert!(reloaded.pings.is_empty() && reloaded.draw.is_none() && reloaded.last_ping.is_none());
+        assert!(reloaded.session.pings.is_empty() && reloaded.session.draw.is_none() && reloaded.session.last_ping.is_none());
         assert!(Marker::drawn(Shape::Square, [0.0; 3], [0.0; 3], [255; 4]).is_none());
     }
 
@@ -1773,7 +1801,7 @@ mod tests {
             region: 7,
         };
         cfg.enter_region(key.clone(), "R");
-        cfg.layers.push(Layer {
+        cfg.session.layers.push(Layer {
             name: "Mine".into(),
             visible: false,
             locked: true,
@@ -1786,10 +1814,10 @@ mod tests {
             region: 8,
         };
         cfg.enter_region(other, "S");
-        assert_eq!(cfg.layers, Layer::defaults(), "another region starts on the default layers");
+        assert_eq!(cfg.session.layers, Layer::defaults(), "another region starts on the default layers");
         cfg.enter_region(key, "R");
-        assert_eq!(cfg.layers.len(), 4);
-        assert!(!cfg.layers[3].visible && cfg.layers[3].locked);
+        assert_eq!(cfg.session.layers.len(), 4);
+        assert!(!cfg.session.layers[3].visible && cfg.session.layers[3].locked);
         assert_eq!(cfg.markers[0].style.layer, 3);
         assert!(!cfg.layer_visible(&cfg.markers[0]) && cfg.layer_locked(&cfg.markers[0]));
     }
@@ -1840,7 +1868,7 @@ mod tests {
             },
             "Layered",
         );
-        layered.layers[0].locked = true;
+        layered.session.layers[0].locked = true;
         layered.save_set();
         assert_eq!(layered.library.regions.len(), 1);
         assert!(layered.library.regions[0].selected().expect("set").layers[0].locked);
@@ -1856,14 +1884,14 @@ mod tests {
         cfg.enter_region(key, "R");
         cfg.sync_history();
         cfg.push_undo(cfg.snapshot());
-        assert_eq!(cfg.history.undo.len(), 1);
+        assert_eq!(cfg.session.history.undo.len(), 1);
         assert_eq!(cfg.clone(), cfg, "a copy compares equal without the history");
-        assert!(cfg.clone().history.undo.is_empty());
+        assert!(cfg.clone().session.history.undo.is_empty());
         cfg.library
             .region_mut(&cfg.current_region.clone().expect("region"), "")
             .add("other".into(), &[]);
         cfg.sync_history();
-        assert!(cfg.history.undo.is_empty(), "another active set starts a new history");
+        assert!(cfg.session.history.undo.is_empty(), "another active set starts a new history");
     }
 
     #[test]
@@ -1918,7 +1946,7 @@ mod tests {
         assert_eq!(badges, vec!["A", "B", ""]);
         assert!(cfg.markers.iter().all(|m| m.name.is_empty()));
         assert_eq!(cfg.markers.iter().filter(|m| m.selected).count(), 1, "the new one is the selection");
-        assert_eq!(cfg.history.undo.len(), 3);
+        assert_eq!(cfg.session.history.undo.len(), 3);
         assert!(cfg.undo());
         assert_eq!(cfg.markers.len(), 2);
         assert!(cfg.redo());
@@ -1930,7 +1958,7 @@ mod tests {
         let mut cfg = Settings::default();
         cfg.place_marker(Shape::Pin, [10.0, 20.0, 30.0]);
         let before = cfg.snapshot();
-        cfg.edit_drag = Some(EditGesture::Move {
+        cfg.session.edit_drag = Some(EditGesture::Move {
             start: [0.0, 0.0],
             originals: cfg.markers.clone(),
             before: before.clone(),
@@ -1938,7 +1966,7 @@ mod tests {
         cfg.markers[0].position = [99.0, 99.0, 30.0];
         cfg.cancel_gesture();
         assert_eq!(cfg.markers, before.markers);
-        assert!(cfg.edit_drag.is_none());
+        assert!(cfg.session.edit_drag.is_none());
     }
 
     #[test]

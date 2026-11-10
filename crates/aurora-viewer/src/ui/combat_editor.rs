@@ -435,7 +435,7 @@ fn fresh(cfg: &Settings, pen: &Pen, layer: usize, shape: Shape, name: String, po
             fill: pen.fill,
             width: pen.width,
             dash: pen.dash,
-            layer: layer.min(cfg.layers.len().saturating_sub(1)) as u8,
+            layer: layer.min(cfg.session.layers.len().saturating_sub(1)) as u8,
             ..Style::default()
         },
         ..Marker::default()
@@ -487,7 +487,7 @@ impl Editor {
             return;
         }
         cfg.sync_history();
-        let id = cfg.history.of.clone();
+        let id = cfg.session.history.of.clone();
         if self.identity != id {
             self.identity = id;
             self.pending = None;
@@ -511,7 +511,7 @@ impl Editor {
             skip_history = self.body(ui, p, cfg, world);
         });
         let now = ctx.input(|i| i.time);
-        if !skip_history && (cfg.markers != before.markers || cfg.layers != before.layers) {
+        if !skip_history && (cfg.markers != before.markers || cfg.session.layers != before.layers) {
             if self.pending.is_none() {
                 self.pending = Some(before);
             }
@@ -547,10 +547,10 @@ impl Editor {
         let name = region.name.clone();
         let mut history_moved = false;
         self.row_hover_prev = self.row_hover.take();
-        if cfg.layers.is_empty() {
-            cfg.layers = Layer::defaults();
+        if cfg.session.layers.is_empty() {
+            cfg.session.layers = Layer::defaults();
         }
-        self.layer = self.layer.min(cfg.layers.len() - 1);
+        self.layer = self.layer.min(cfg.session.layers.len() - 1);
         if self.pen.fill == 0 && self.pen.width == 0.0 {
             self.pen = Pen::default();
         }
@@ -610,7 +610,11 @@ impl Editor {
                 self.paste(cfg, clip, at);
             } else if pressed(ui, Key::A) {
                 for m in &mut cfg.markers {
-                    m.selected = cfg.layers.get(usize::from(m.style.layer)).is_none_or(|l| l.visible && !l.locked);
+                    m.selected = cfg
+                        .session
+                        .layers
+                        .get(usize::from(m.style.layer))
+                        .is_none_or(|l| l.visible && !l.locked);
                 }
             }
             return moved;
@@ -754,12 +758,18 @@ impl Editor {
                 p,
                 "arrow-back-up",
                 tr!("combat-editor-undo"),
-                !cfg.history.undo.is_empty() || self.pending.is_some(),
+                !cfg.session.history.undo.is_empty() || self.pending.is_some(),
             ) {
                 self.flush(cfg);
                 moved |= cfg.undo();
             }
-            if widgets::icon_button(ui, p, "arrow-forward-up", tr!("combat-editor-redo"), !cfg.history.redo.is_empty()) {
+            if widgets::icon_button(
+                ui,
+                p,
+                "arrow-forward-up",
+                tr!("combat-editor-redo"),
+                !cfg.session.history.redo.is_empty(),
+            ) {
                 self.flush(cfg);
                 moved |= cfg.redo();
             }
@@ -1691,11 +1701,11 @@ impl Editor {
         if single {
             self.shape_fields(ui, p, &mut edited, origin);
         }
-        if cfg.layers.len() > 1 {
+        if cfg.session.layers.len() > 1 {
             ui.add_space(4.0);
             ui.label(egui::RichText::new(tr!("combat-editor-layer")).size(11.5).color(p.muted));
-            let labels: Vec<(&str, bool)> = cfg.layers.iter().map(|l| (l.name.as_str(), false)).collect();
-            let mut layer = usize::from(edited.style.layer).min(cfg.layers.len() - 1);
+            let labels: Vec<(&str, bool)> = cfg.session.layers.iter().map(|l| (l.name.as_str(), false)).collect();
+            let mut layer = usize::from(edited.style.layer).min(cfg.session.layers.len() - 1);
             if widgets::segmented(ui, p, &mut layer, &labels) {
                 edited.style.layer = layer as u8;
             }
@@ -1763,7 +1773,7 @@ impl Editor {
             )
             .clicked()
             {
-                cfg.markers.retain(|m| !(m.selected && editable_ref(&cfg.layers, m)));
+                cfg.markers.retain(|m| !(m.selected && editable_ref(&cfg.session.layers, m)));
             }
         });
     }
@@ -1950,7 +1960,7 @@ impl Editor {
         let mut select: Option<(Uuid, bool)> = None;
         let mut order: Option<(Uuid, bool)> = None;
         let mut remove = None;
-        let layers = cfg.layers.len();
+        let layers = cfg.session.layers.len();
         let counts: Vec<usize> = (0..layers)
             .map(|i| {
                 cfg.markers
@@ -1970,7 +1980,7 @@ impl Editor {
                         self.collapsed.remove(&li);
                     }
                 }
-                let layer = &mut cfg.layers[li];
+                let layer = &mut cfg.session.layers[li];
                 if widgets::icon_toggle(
                     ui,
                     p,
@@ -2030,7 +2040,7 @@ impl Editor {
             move_in_layer(cfg, id, up);
         }
         if let Some(index) = remove {
-            cfg.layers.remove(index);
+            cfg.session.layers.remove(index);
             self.collapsed.clear();
             for m in &mut cfg.markers {
                 let layer = usize::from(m.style.layer);
@@ -2044,7 +2054,7 @@ impl Editor {
             }
         }
         ui.add_space(6.0);
-        if cfg.layers.len() < MAX_LAYERS
+        if cfg.session.layers.len() < MAX_LAYERS
             && widgets::action_button(
                 ui,
                 p,
@@ -2055,8 +2065,8 @@ impl Editor {
             )
             .clicked()
         {
-            cfg.layers.push(Layer {
-                name: format!("{} {}", tr!("combat-editor-layer"), cfg.layers.len() + 1),
+            cfg.session.layers.push(Layer {
+                name: format!("{} {}", tr!("combat-editor-layer"), cfg.session.layers.len() + 1),
                 ..Layer::default()
             });
         }
@@ -2342,7 +2352,7 @@ impl Editor {
 /// Writes the active set to a file the person picks.
 fn export_set_file(cfg: &Settings, with_view: bool) -> (String, bool) {
     let name = cfg.active_set_name();
-    let mut file = crate::combat::sets::SetFile::new(name.clone(), cfg.layers.clone(), cfg.markers.clone());
+    let mut file = crate::combat::sets::SetFile::new(name.clone(), cfg.session.layers.clone(), cfg.markers.clone());
     if with_view {
         file.view = Some(cfg.map_view);
     }
@@ -2499,7 +2509,7 @@ mod tests {
         let one = cfg.snapshot();
         cfg.push_undo(Snapshot {
             markers: Vec::new(),
-            layers: cfg.layers.clone(),
+            layers: cfg.session.layers.clone(),
         });
         cfg.add_marker([4.0, 5.0, 6.0]);
         cfg.push_undo(one);
@@ -2613,11 +2623,11 @@ mod tests {
         zone.radius = 10.0;
         cfg.markers = vec![zone];
         let mut editor = Editor::default();
-        cfg.layers[0].locked = true;
+        cfg.session.layers[0].locked = true;
         editor.select_press(&mut cfg, &map, map.at(100.0, 100.0), false, false, 0.0);
         assert!(selected(&cfg).is_empty());
-        cfg.layers[0].locked = false;
-        cfg.layers[0].visible = false;
+        cfg.session.layers[0].locked = false;
+        cfg.session.layers[0].visible = false;
         editor.select_press(&mut cfg, &map, map.at(100.0, 100.0), false, false, 0.0);
         assert!(selected(&cfg).is_empty());
     }
@@ -2679,7 +2689,7 @@ mod tests {
         }
         // what the layers tab does for a removed layer 1
         let index = 1usize;
-        cfg.layers.remove(index);
+        cfg.session.layers.remove(index);
         for m in &mut cfg.markers {
             let layer = usize::from(m.style.layer);
             m.style.layer = if layer == index {
@@ -2785,6 +2795,6 @@ mod tests {
         cfg.markers[0].style.hidden = true;
         editor.select_press(&mut cfg, &map, map.at(100.0, 100.0), false, false, 0.0);
         assert!(selected(&cfg).is_empty(), "a hidden marker is not picked");
-        assert!(!editable_ref(&cfg.layers, &cfg.markers[0]));
+        assert!(!editable_ref(&cfg.session.layers, &cfg.markers[0]));
     }
 }
