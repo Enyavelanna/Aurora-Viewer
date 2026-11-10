@@ -294,6 +294,7 @@ pub struct App {
     combat_subscription: Option<(uuid::Uuid, bool, Instant)>,
     tactical_press: Option<crate::combat::ping_ui::Press>,
     combat_saved: Instant,
+    map_exports: map_export::MapExports,
     native_anchor: crate::movement::movelock::Controller,
     anchor_stands: crate::ao::anchor::StandCheck,
     /// Keep the verified standing set through an asynchronous stand-up reply.
@@ -1307,6 +1308,7 @@ impl App {
             combat_subscription: None,
             tactical_press: None,
             combat_saved: Instant::now(),
+            map_exports: Default::default(),
             native_anchor: Default::default(),
             anchor_stands: Default::default(),
             anchor_pose: None,
@@ -17281,6 +17283,8 @@ impl App {
                 if combat_result.changed {
                     self.settings.maps.tactical.touch();
                 }
+                self.poll_map_export();
+                self.combat_window.set_exporting(self.map_exports.running());
                 if let Some(job) = self.combat_window.take_export() {
                     self.export_marker_map(job);
                 }

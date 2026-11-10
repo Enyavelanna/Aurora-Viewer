@@ -13341,6 +13341,7 @@ combat-editor-export-help = 地形、マーカー、ピンの凡例、縮尺、�
 combat-editor-export-with-title = リージョン名とセット名
 combat-editor-export-with-legend = ピンの凡例
 combat-editor-export-image = 画像を保存…
+combat-editor-exporting = 画像を保存しています…
 combat-export-legend = 凡例
 combat-editor-file-title = セットファイル
 combat-editor-file-help = レイヤーを含むセット全体をファイルに保存、または新しいセットとして読み込みます。

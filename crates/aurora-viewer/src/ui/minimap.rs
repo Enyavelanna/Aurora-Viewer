@@ -1564,58 +1564,105 @@ impl MiniMap {
     }
 }
 
-/// The region as pictures `side` pixels wide for the exported map: the ground
-/// first (height shaded, or one plain colour, as bright as the view says; left
-/// out when the picture is of the markers alone), then the objects and the
-/// parcel lines when asked.
-pub(crate) fn export_rasters(
+/// What the exported map's rasters read of the world, copied on the main
+/// thread so the pixel work can run on another one.
+pub(crate) struct ExportInputs {
+    side: usize,
+    view: crate::combat::tactical::MapView,
+    markers_only: bool,
+    heightmap: crate::world::terrain::Heightmap,
+    water: f32,
+    center: (f64, f64),
+    dots: Vec<Dot>,
+    parcels: Vec<ParcelRegion>,
+    for_sale: bool,
+}
+
+/// Copies what the exported map needs: the ground, and the objects and parcel
+/// lines when the view asks for them.
+pub(crate) fn export_inputs(
     world: &World,
     side: usize,
     view: crate::combat::tactical::MapView,
     markers_only: bool,
     opts: &MapSettings,
-) -> Option<Vec<egui::ColorImage>> {
-    use crate::combat::tactical::Ground;
-    let (objects, parcels) = (view.objects, view.parcels);
-    let dim = view.dim.clamp(0.2, 1.0);
+) -> Option<ExportInputs> {
     let region = world.main()?;
     let (ox, oy) = aurora_net::handle_to_origin(region.handle);
     let (w, h) = (region.heightmap.size_x as f32, region.heightmap.size_y as f32);
     let side_m = w.max(h);
     let water = region.info.as_ref().map(|i| i.water_height).unwrap_or(20.0);
-    let metres = |i: usize| i as f32 * side_m / side as f32;
-    let mut terrain = Vec::with_capacity(side * side);
-    for j in 0..side {
-        for i in 0..side {
-            // image row 0 is north
-            let (x, y) = (metres(i), metres(side - 1 - j));
-            let z = region.heightmap.sample(x, y);
-            let base = terrain_color(z, water);
-            // light from the north-west: slopes facing it brighten
-            let slope = (region.heightmap.sample(x - 1.0, y) - region.heightmap.sample(x + 1.0, y) + region.heightmap.sample(x, y + 1.0)
-                - region.heightmap.sample(x, y - 1.0))
-                * 0.12;
-            let shade = if z < water { 1.0 } else { (1.0 + slope).clamp(0.72, 1.28) };
-            let lit = |c: u8| (f32::from(c) * shade * dim).clamp(0.0, 255.0) as u8;
-            terrain.push(Color32::from_rgb(lit(base.r()), lit(base.g()), lit(base.b())));
-        }
-    }
-    let mut out = Vec::new();
-    if !markers_only {
-        out.push(match view.ground {
-            Ground::Shaded => egui::ColorImage::new([side, side], terrain),
-            Ground::Flat => egui::ColorImage::filled([side, side], Color32::from_rgb(52, 58, 72)),
-        });
-    }
     let center = (ox as f64 + f64::from(w) / 2.0, oy as f64 + f64::from(h) / 2.0);
     let tpm = side as f32 / side_m;
-    if objects {
-        out.push(rasterize_objects(world, center, side, tpm, opts));
+    Some(ExportInputs {
+        side,
+        view,
+        markers_only,
+        heightmap: region.heightmap.clone(),
+        water,
+        center,
+        dots: if view.objects {
+            object_dots(world, center, side, tpm, opts)
+        } else {
+            Vec::new()
+        },
+        parcels: if view.parcels {
+            parcel_regions(world, center, side, tpm, opts.mini_collision)
+        } else {
+            Vec::new()
+        },
+        for_sale: opts.mini_for_sale,
+    })
+}
+
+impl ExportInputs {
+    /// The region as pictures `side` pixels wide for the exported map: the
+    /// ground first (height shaded, or one plain colour, as bright as the view
+    /// says; left out when the picture is of the markers alone), then the
+    /// objects and the parcel lines when asked.
+    pub(crate) fn rasters(&self) -> Vec<egui::ColorImage> {
+        use crate::combat::tactical::Ground;
+        let (side, view) = (self.side, self.view);
+        let dim = view.dim.clamp(0.2, 1.0);
+        let (w, h) = (self.heightmap.size_x as f32, self.heightmap.size_y as f32);
+        let side_m = w.max(h);
+        let water = self.water;
+        let metres = |i: usize| i as f32 * side_m / side as f32;
+        let mut out = Vec::new();
+        if !self.markers_only {
+            out.push(match view.ground {
+                Ground::Shaded => {
+                    let mut terrain = Vec::with_capacity(side * side);
+                    for j in 0..side {
+                        for i in 0..side {
+                            // image row 0 is north
+                            let (x, y) = (metres(i), metres(side - 1 - j));
+                            let z = self.heightmap.sample(x, y);
+                            let base = terrain_color(z, water);
+                            // light from the north-west: slopes facing it brighten
+                            let slope = (self.heightmap.sample(x - 1.0, y) - self.heightmap.sample(x + 1.0, y)
+                                + self.heightmap.sample(x, y + 1.0)
+                                - self.heightmap.sample(x, y - 1.0))
+                                * 0.12;
+                            let shade = if z < water { 1.0 } else { (1.0 + slope).clamp(0.72, 1.28) };
+                            let lit = |c: u8| (f32::from(c) * shade * dim).clamp(0.0, 255.0) as u8;
+                            terrain.push(Color32::from_rgb(lit(base.r()), lit(base.g()), lit(base.b())));
+                        }
+                    }
+                    egui::ColorImage::new([side, side], terrain)
+                }
+                Ground::Flat => egui::ColorImage::filled([side, side], Color32::from_rgb(52, 58, 72)),
+            });
+        }
+        let tpm = side as f32 / side_m;
+        if view.objects {
+            out.push(paint_objects(&self.dots, self.center, side, tpm));
+        }
+        if view.parcels {
+            out.push(paint_parcels(&self.parcels, self.center, side, tpm, self.for_sale));
+        }
+        out
     }
-    if parcels {
-        out.push(rasterize_parcels(world, center, side, tpm, opts.mini_for_sale, opts.mini_collision));
-    }
-    Some(out)
 }
 
 pub(crate) struct RegionImage {
@@ -1691,9 +1738,23 @@ fn draw_raster(painter: &egui::Painter, view: &View, r: &Raster) {
 /// LLViewerObjectList::renderObjectsForMap into a `size`² image centered on
 /// `center` (global), `tpm` texels per meter.
 fn rasterize_objects(world: &World, center: (f64, f64), size: usize, tpm: f32, opts: &MapSettings) -> egui::ColorImage {
-    let mut img = egui::ColorImage::filled([size, size], Color32::TRANSPARENT);
+    paint_objects(&object_dots(world, center, size, tpm, opts), center, size, tpm)
+}
+
+/// One object of the map: where it is (global metres), its radius and colour.
+struct Dot {
+    gx: f64,
+    gy: f64,
+    r: f32,
+    col: Color32,
+}
+
+/// The objects the map shows, with their place, size and colour; the world
+/// is read here and nowhere else.
+fn object_dots(world: &World, center: (f64, f64), size: usize, tpm: f32, opts: &MapSettings) -> Vec<Dot> {
+    let mut dots = Vec::new();
     let Some((ox, oy)) = world.main_origin() else {
-        return img;
+        return dots;
     };
     let agent_z = world.agent.position.z;
     let water: HashMap<RegionHandle, f32> = world
@@ -1768,6 +1829,15 @@ fn rasterize_objects(world: &World, center: (f64, f64), size: usize, tpm: f32, o
         if f & FLAGS_PHANTOM != 0 {
             col = Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), PHANTOM_ALPHA);
         }
+        dots.push(Dot { gx, gy, r, col });
+    }
+    dots
+}
+
+/// The dots as a `size`² image centered on `center`, `tpm` texels per metre.
+fn paint_objects(dots: &[Dot], center: (f64, f64), size: usize, tpm: f32) -> egui::ColorImage {
+    let mut img = egui::ColorImage::filled([size, size], Color32::TRANSPARENT);
+    for Dot { gx, gy, r, col } in dots {
         // renderPoint: a filled square of round(2 r tpm) texels
         let d = ((2.0 * r * tpm).round() as i64).max(1);
         let tx = ((gx - center.0) * tpm as f64 + size as f64 * 0.5) as i64;
@@ -1776,7 +1846,7 @@ fn rasterize_objects(world: &World, center: (f64, f64), size: usize, tpm: f32, o
         let n = size as i64;
         for y in (ty - neg).max(0)..(ty + pos).min(n) {
             for x in (tx - neg).max(0)..(tx + pos).min(n) {
-                img.pixels[(y * n + x) as usize] = col;
+                img.pixels[(y * n + x) as usize] = *col;
             }
         }
     }
@@ -1786,6 +1856,43 @@ fn rasterize_objects(world: &World, center: (f64, f64), size: usize, tpm: f32, o
 /// LLNetMap::renderPropertyLinesForRegion: south / west parcel lines of
 /// every 4 m cell, north and east region borders, for sale cells filled.
 fn rasterize_parcels(world: &World, center: (f64, f64), size: usize, tpm: f32, for_sale: bool, collision: bool) -> egui::ColorImage {
+    paint_parcels(&parcel_regions(world, center, size, tpm, collision), center, size, tpm, for_sale)
+}
+
+/// A region near the picture with its parcel overlay and ban lines.
+struct ParcelRegion {
+    x0: f64,
+    y0: f64,
+    w: f64,
+    h: f64,
+    overlay: Option<(u32, u32, Vec<u8>)>,
+    banned: Option<crate::world::worldmap::Collision>,
+}
+
+/// The regions the picture reaches, copied out of the world.
+fn parcel_regions(world: &World, center: (f64, f64), size: usize, tpm: f32, collision: bool) -> Vec<ParcelRegion> {
+    let half_m = size as f64 / tpm as f64 * 0.5;
+    let mut out = Vec::new();
+    for (h, r) in &world.regions {
+        let (ox, oy) = aurora_net::handle_to_origin(*h);
+        let (w, hh) = (r.heightmap.size_x as f64, r.heightmap.size_y as f64);
+        let (x0, y0) = (ox as f64, oy as f64);
+        if x0 > center.0 + half_m || y0 > center.1 + half_m || x0 + w < center.0 - half_m || y0 + hh < center.1 - half_m {
+            continue;
+        }
+        out.push(ParcelRegion {
+            x0,
+            y0,
+            w,
+            h: hh,
+            overlay: world.map.overlays.get(h).cloned(),
+            banned: world.map.collision.as_ref().filter(|c| collision && c.handle == *h).cloned(),
+        });
+    }
+    out
+}
+
+fn paint_parcels(regions: &[ParcelRegion], center: (f64, f64), size: usize, tpm: f32, for_sale: bool) -> egui::ColorImage {
     let mut img = egui::ColorImage::filled([size, size], Color32::TRANSPARENT);
     let n = size as i64;
     let to_tex = |gx: f64, gy: f64| -> (i64, i64) {
@@ -1800,15 +1907,17 @@ fn rasterize_parcels(world: &World, center: (f64, f64), size: usize, tpm: f32, f
         }
     };
     let half_m = size as f64 / tpm as f64 * 0.5;
-    for (h, r) in &world.regions {
-        let (ox, oy) = aurora_net::handle_to_origin(*h);
-        let (w, hh) = (r.heightmap.size_x as f64, r.heightmap.size_y as f64);
-        let (x0, y0) = (ox as f64, oy as f64);
-        if x0 > center.0 + half_m || y0 > center.1 + half_m || x0 + w < center.0 - half_m || y0 + hh < center.1 - half_m {
-            continue;
-        }
-        let banned = world.map.collision.as_ref().filter(|c| collision && c.handle == *h);
-        if let Some((cx, cy, data)) = world.map.overlays.get(h) {
+    for region in regions {
+        let ParcelRegion {
+            x0,
+            y0,
+            w,
+            h: hh,
+            overlay,
+            banned,
+        } = region;
+        let (x0, y0, w, hh) = (*x0, *y0, *w, *hh);
+        if let Some((cx, cy, data)) = overlay {
             for j in 0..*cy {
                 for i in 0..*cx {
                     let b = data[(j * cx + i) as usize];
@@ -1821,7 +1930,7 @@ fn rasterize_parcels(world: &World, center: (f64, f64), size: usize, tpm: f32, f
                     let (bx, by) = to_tex(gx + 4.0, gy);
                     let kind = b & 0x07;
                     let sale = for_sale && (kind == 4 || kind == 5);
-                    if sale || banned.is_some_and(|c| c.cell(i, j, *cx)) {
+                    if sale || banned.as_ref().is_some_and(|c| c.cell(i, j, *cx)) {
                         let c = match kind {
                             4 if sale => PARCEL_FOR_SALE,
                             5 if sale => PARCEL_AUCTION,

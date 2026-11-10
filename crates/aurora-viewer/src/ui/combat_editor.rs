@@ -312,6 +312,8 @@ pub(crate) struct Editor {
     collapsed: BTreeSet<usize>,
     /// The export asked for, and the choices behind it.
     export_job: Option<ExportJob>,
+    /// A picture is being made in the background.
+    pub exporting: bool,
     export_size: usize,
     export_title: bool,
     export_legend: bool,
@@ -352,6 +354,7 @@ impl Default for Editor {
             row_hover_prev: None,
             collapsed: BTreeSet::new(),
             export_job: None,
+            exporting: false,
             export_size: 1,
             export_title: true,
             export_legend: true,
@@ -2284,17 +2287,22 @@ impl Editor {
             tr!("combat-editor-export-transparent"),
             tr!("combat-editor-export-transparent-help"),
         );
-        if widgets::action_button_if(
-            ui,
-            p,
-            "photo-filled",
-            tr!("combat-editor-export-image"),
-            widgets::ActionKind::Primary,
-            vec2(0.0, 28.0),
-            true,
-        )
-        .clicked()
-        {
+        let export_clicked = if self.exporting {
+            widgets::busy_button(ui, p, tr!("combat-editor-exporting"));
+            false
+        } else {
+            widgets::action_button_if(
+                ui,
+                p,
+                "photo-filled",
+                tr!("combat-editor-export-image"),
+                widgets::ActionKind::Primary,
+                vec2(0.0, 28.0),
+                true,
+            )
+            .clicked()
+        };
+        if export_clicked {
             self.export_job = Some(ExportJob {
                 side: [1024, 2048, 4096][self.export_size.min(2)],
                 title: self.export_title,
