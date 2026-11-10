@@ -622,6 +622,9 @@ pub(crate) struct Session {
     pub aimed_ping: Option<Uuid>,
     pub last_tap: Option<(Uuid, Instant)>,
     pub pending_contacts: BTreeMap<(Uuid, Uuid), Instant>,
+    /// Something saved changed since the last write of the settings: every
+    /// mutation of the library, the working copy or the Combat options sets it.
+    pub dirty: bool,
 }
 impl Default for Session {
     fn default() -> Self {
@@ -651,6 +654,7 @@ impl Default for Session {
             aimed_ping: None,
             last_tap: None,
             pending_contacts: Default::default(),
+            dirty: false,
         }
     }
 }
@@ -753,9 +757,39 @@ impl Settings {
     pub fn layer_locked(&self, m: &Marker) -> bool {
         self.session.layers.get(usize::from(m.style.layer)).is_some_and(|l| l.locked)
     }
+    /// Marks the settings as changed: the next autosave writes them.
+    pub fn touch(&mut self) {
+        self.session.dirty = true;
+    }
+    /// True once per change: the autosave writes the settings when it is.
+    /// A drag under way waits for its end, the working copy being stored then.
+    pub fn take_dirty(&mut self) -> bool {
+        if self.session.edit_drag.is_some() {
+            return false;
+        }
+        std::mem::take(&mut self.session.dirty)
+    }
+    /// Marks the settings as changed when the person pressed, released or typed
+    /// while an editing surface (the editor window, the minimap in edit mode, a
+    /// menu) was in use: those edit the working copy in place.
+    pub fn note_input(&mut self, ctx: &egui::Context) {
+        let used = ctx.input(|i| {
+            i.pointer.any_released()
+                || i.events.iter().any(|e| {
+                    matches!(
+                        e,
+                        egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::Paste(_)
+                    )
+                })
+        });
+        if used {
+            self.touch();
+        }
+    }
     /// Drops a drag under way, putting the markers back as they were.
     pub fn cancel_gesture(&mut self) {
         if let Some(gesture) = self.session.edit_drag.take() {
+            self.touch();
             let before = gesture.before().clone();
             (self.markers, self.session.layers) = (before.markers, before.layers);
         }
@@ -780,6 +814,7 @@ impl Settings {
         if self.markers.len() >= 256 {
             return;
         }
+        self.touch();
         self.sync_history();
         let before = self.snapshot();
         let mut m = Marker {
@@ -833,6 +868,7 @@ impl Settings {
     }
     /// Remembers `before`, the state a change started from.
     pub fn push_undo(&mut self, before: Snapshot) {
+        self.touch();
         if self.session.history.undo.len() == UNDO_STEPS {
             self.session.history.undo.remove(0);
         }
@@ -843,6 +879,7 @@ impl Settings {
         let Some(previous) = self.session.history.undo.pop() else {
             return false;
         };
+        self.touch();
         let now = self.snapshot();
         self.session.history.redo.push(now);
         (self.markers, self.session.layers) = (previous.markers, previous.layers);
@@ -852,6 +889,7 @@ impl Settings {
         let Some(next) = self.session.history.redo.pop() else {
             return false;
         };
+        self.touch();
         let now = self.snapshot();
         self.session.history.undo.push(now);
         (self.markers, self.session.layers) = (next.markers, next.layers);
@@ -871,6 +909,7 @@ impl Settings {
         let Some(key) = self.current_region.clone() else {
             return false;
         };
+        self.touch();
         self.save_set();
         if let Some(view) = file.view {
             self.map_view = view.sane();
@@ -926,6 +965,7 @@ impl Settings {
         if self.current_region.as_ref() == Some(&key) {
             return;
         }
+        self.touch();
         self.cancel_gesture();
         self.session.editing = false;
         if self.current_region.is_some() {
@@ -976,6 +1016,7 @@ impl Settings {
 
     pub fn add_marker(&mut self, position: [f64; 3]) {
         if self.markers.len() < 256 {
+            self.touch();
             self.markers.push(Marker {
                 id: Uuid::new_v4(),
                 name: String::new(),
@@ -1072,6 +1113,7 @@ impl Settings {
         if title.is_empty() {
             return;
         }
+        self.touch();
         let key = title.to_lowercase();
         if let Some(entry) = self.title_colors.iter_mut().find(|(t, _)| t.to_lowercase() == key) {
             entry.1 = color;
@@ -1080,12 +1122,14 @@ impl Settings {
         }
     }
     pub fn remove_title_color(&mut self, title: &str) {
+        self.touch();
         let key = super::allies::clean_tag(title).to_lowercase();
         self.title_colors.retain(|(t, _)| t.to_lowercase() != key);
     }
     /// The Sharing tab keeps one choice of who receives, "allies": the older teammates
     /// and active group audiences become allies, and the group switch follows the allied group.
     pub fn migrate_audience(&mut self) {
+        self.touch();
         if self.share_group || self.ping_audience == 2 {
             self.allies.active_group = true;
         }
@@ -1468,25 +1512,33 @@ pub(crate) fn marker_list(ui: &mut egui::Ui, p: &Palette, context: &Context, cfg
     }
     ui.add_space(4.0);
     let mut remove = None;
+    let mut changed = false;
     for (i, m) in cfg.markers.iter_mut().enumerate() {
         ui.horizontal(|ui| {
-            widgets::checkbox(ui, p, &mut m.selected, "").on_hover_text(tr!("tactical-send-tick"));
-            widgets::color_button(ui, p, ("marker-list-color", m.id), &mut m.color, true);
+            changed |= widgets::checkbox(ui, p, &mut m.selected, "")
+                .on_hover_text(tr!("tactical-send-tick"))
+                .changed();
+            changed |= widgets::color_button(ui, p, ("marker-list-color", m.id), &mut m.color, true).changed();
             if let Some(icon) = crate::ui::icons::global(crate::ui::combat_editor::shape_icon(m.shape())) {
                 ui.add(egui::Image::new((icon.id(), egui::Vec2::splat(14.0))).tint(p.muted));
             }
             let room = (ui.available_width() - 34.0).max(60.0);
             let hint = m.shape().label();
-            ui.add(
-                egui::TextEdit::singleline(&mut m.name)
-                    .char_limit(128)
-                    .hint_text(hint)
-                    .desired_width(room),
-            );
+            changed |= ui
+                .add(
+                    egui::TextEdit::singleline(&mut m.name)
+                        .char_limit(128)
+                        .hint_text(hint)
+                        .desired_width(room),
+                )
+                .changed();
             if widgets::icon_button(ui, p, "trash-filled", tr!("tactical-remove"), true) {
                 remove = Some(i);
             }
         });
+    }
+    if changed {
+        cfg.touch();
     }
     if let Some(i) = remove {
         cfg.sync_history();
@@ -1503,11 +1555,13 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
         return;
     };
     cfg.save_set();
+    let mut changed = false;
     let region = cfg.library.region_mut(&key, &cfg.session.current_region_name);
     // a fresh region shows its default set, created here on first use
     if region.sets.is_empty() {
         region.add(tr!("tactical-set-default").into(), &cfg.markers);
         region.save_layers(&cfg.session.layers);
+        changed = true;
     }
     let previous = region.active;
     egui::ComboBox::from_id_salt("combat-set")
@@ -1518,28 +1572,33 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
             }
         });
     if let Some(set) = region.sets.iter_mut().find(|s| Some(s.id) == region.active) {
-        ui.text_edit_singleline(&mut set.name);
+        changed |= ui.text_edit_singleline(&mut set.name).changed();
     }
     ui.horizontal_wrapped(|ui| {
         let size = egui::vec2(0.0, 26.0);
         let flat = widgets::ActionKind::Flat;
         if widgets::action_button(ui, p, "plus", tr!("tactical-set-new"), flat, size).clicked() {
             region.add(tr!("tactical-set-default").into(), &[]);
+            changed = true;
         }
         if widgets::action_button(ui, p, "copy-filled", tr!("tactical-set-duplicate"), flat, size).clicked() {
             let name = region.selected().map(|s| s.name.clone()).unwrap_or_default();
             region.add(name, &cfg.markers);
             region.save_layers(&cfg.session.layers);
+            changed = true;
         }
         if widgets::action_button(ui, p, "trash-filled", tr!("tactical-remove"), widgets::ActionKind::Danger, size).clicked() {
             region.remove_active();
+            changed = true;
         }
         if widgets::action_button(ui, p, "device-floppy-filled", tr!("tactical-set-save"), flat, size).clicked() {
             region.save(&cfg.markers);
             region.save_layers(&cfg.session.layers);
+            changed = true;
         }
     });
     if region.active != previous {
+        changed = true;
         let set = region.selected().cloned();
         cfg.adopt(set.as_ref());
         cfg.session.draw = None;
@@ -1563,8 +1622,12 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
                 region.add(tr!("tactical-set-unassigned").into(), &markers);
                 let set = region.selected().cloned();
                 cfg.adopt(set.as_ref());
+                changed = true;
             }
         });
+    }
+    if changed {
+        cfg.touch();
     }
 }
 
@@ -2006,5 +2069,78 @@ mod tests {
         assert_eq!(back.map_view, cfg.map_view);
         let old: Settings = serde_json::from_str("{}").expect("old settings");
         assert_eq!(old.map_view, MapView::default());
+    }
+
+    fn clean() -> Settings {
+        let mut cfg = Settings::default();
+        assert!(!cfg.take_dirty(), "a fresh settings has nothing to save");
+        cfg
+    }
+
+    #[test]
+    fn every_mutation_of_the_saved_state_marks_the_settings_dirty() {
+        let key = super::super::sets::RegionKey {
+            grid: "g".into(),
+            region: 3,
+        };
+        let mut cfg = clean();
+        cfg.enter_region(key.clone(), "Region");
+        assert!(cfg.take_dirty(), "entering a region");
+        assert!(!cfg.take_dirty(), "the flag clears once taken");
+
+        cfg.place_marker(Shape::Pin, [1.0, 2.0, 3.0]);
+        assert!(cfg.take_dirty(), "placing a marker");
+        cfg.add_marker([4.0, 5.0, 6.0]);
+        assert!(cfg.take_dirty(), "adding a marker");
+
+        let before = cfg.snapshot();
+        cfg.push_undo(before);
+        assert!(cfg.take_dirty(), "pushing an undo step");
+        assert!(cfg.undo());
+        assert!(cfg.take_dirty(), "undo");
+        assert!(cfg.redo());
+        assert!(cfg.take_dirty(), "redo");
+        assert!(!cfg.redo() && !cfg.take_dirty(), "a redo with nothing to redo changes nothing");
+
+        let file = super::super::sets::SetFile::new("Imported".into(), Vec::new(), Vec::new());
+        assert!(cfg.import_set(file));
+        assert!(cfg.take_dirty(), "importing a set");
+
+        cfg.set_title_color("Team", [1, 2, 3, 255]);
+        assert!(cfg.take_dirty(), "a title colour");
+        cfg.remove_title_color("Team");
+        assert!(cfg.take_dirty(), "removing a title colour");
+        cfg.migrate_audience();
+        assert!(cfg.take_dirty(), "migrating the audience");
+
+        let before = cfg.snapshot();
+        cfg.session.edit_drag = Some(EditGesture::Move {
+            start: [0.0, 0.0],
+            originals: cfg.markers.clone(),
+            before,
+        });
+        cfg.touch();
+        assert!(!cfg.take_dirty(), "a drag under way waits for its end");
+        cfg.cancel_gesture();
+        assert!(cfg.take_dirty(), "putting a gesture back");
+
+        cfg.touch();
+        assert!(cfg.take_dirty(), "an edit of the options");
+    }
+
+    #[test]
+    fn entering_the_same_region_again_or_a_session_reset_saves_nothing() {
+        let key = super::super::sets::RegionKey {
+            grid: "g".into(),
+            region: 4,
+        };
+        let mut cfg = Settings::default();
+        cfg.enter_region(key.clone(), "Region");
+        cfg.take_dirty();
+        cfg.enter_region(key, "Region");
+        cfg.session.reset();
+        cfg.session.sign_out();
+        cfg.cancel_gesture();
+        assert!(!cfg.take_dirty());
     }
 }

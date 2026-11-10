@@ -486,6 +486,9 @@ impl Editor {
         if !self.open {
             return;
         }
+        // the editor changes the working copy in place: any press, release or
+        // key while it is open counts as an edit for the autosave
+        cfg.note_input(ctx);
         cfg.sync_history();
         let id = cfg.session.history.of.clone();
         if self.identity != id {

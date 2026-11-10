@@ -469,6 +469,10 @@ impl MiniMap {
         }
         let drawing = interactive && opts.tactical.session.draw.is_some();
         let editing = interactive && opts.tactical.session.editing && !drawing && !ui.input(|i| i.modifiers.shift);
+        // editing in place and the right-click menu change what is saved
+        if interactive && (opts.tactical.session.editing || drawing || egui::Popup::is_any_open(ui.ctx())) {
+            opts.tactical.note_input(ui.ctx());
+        }
         let pan_drag = !drawing && !editing && (ui.input(|i| i.modifiers.shift) || opts.mini_locked);
         let sense = if !interactive {
             Sense::hover()

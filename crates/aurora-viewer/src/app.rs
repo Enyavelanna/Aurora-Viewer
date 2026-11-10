@@ -293,7 +293,7 @@ pub struct App {
     bridge_runtime: crate::world::bridge::Bridge,
     combat_subscription: Option<(uuid::Uuid, bool, Instant)>,
     tactical_press: Option<crate::combat::ping_ui::Press>,
-    combat_saved: (Instant, String),
+    combat_saved: Instant,
     native_anchor: crate::movement::movelock::Controller,
     anchor_stands: crate::ao::anchor::StandCheck,
     /// Keep the verified standing set through an asynchronous stand-up reply.
@@ -1306,7 +1306,7 @@ impl App {
             bridge_runtime: Default::default(),
             combat_subscription: None,
             tactical_press: None,
-            combat_saved: (Instant::now(), String::new()),
+            combat_saved: Instant::now(),
             native_anchor: Default::default(),
             anchor_stands: Default::default(),
             anchor_pose: None,
@@ -2776,6 +2776,7 @@ impl App {
         self.chat_ui.remember_layout(&mut self.settings);
         self.settings.show_camera_controls = self.panels.camera_controls;
         self.settings.show_movement_controls = self.panels.movement_controls;
+        self.settings.maps.tactical.save_set();
         self.settings.save();
         self.sync_local_picker_bindings();
         self.imports.flush_local_registry();
@@ -5768,6 +5769,7 @@ impl App {
         if let Some(path) = self.name_cache_path() {
             self.world.social.avatar_names.save(&path);
         }
+        self.settings.maps.tactical.save_set();
         self.settings.save();
         // the last lines of the conversations reach their files
         self.world.chat_log.flush(Duration::from_secs(2));
@@ -8529,17 +8531,16 @@ impl App {
             };
             self.settings.maps.tactical.enter_region(key, &self.world.region_name());
         }
-        if self.combat_saved.0.elapsed() >= Duration::from_secs(1) {
-            self.settings.maps.tactical.save_set();
-            if let Ok(document) = serde_json::to_string(&(&self.settings.combat, &self.settings.maps.tactical))
-                && document != self.combat_saved.1
-            {
-                self.combat_saved.1 = document;
+        // Combat's settings are written once a second, and only when something
+        // changed (the tactical settings' dirty flag), not by comparing documents.
+        if self.combat_saved.elapsed() >= Duration::from_secs(1) {
+            if self.settings.maps.tactical.take_dirty() {
+                self.settings.maps.tactical.save_set();
                 if !self.demo {
                     self.settings.save();
                 }
             }
-            self.combat_saved.0 = Instant::now();
+            self.combat_saved = Instant::now();
         }
         self.world.events_this_frame = 0;
         if self.demo && std::env::var_os("AURORA_DEMO_COMBAT").is_some() {
@@ -15701,6 +15702,7 @@ impl App {
                     Default::default()
                 };
                 let [ar, ag, ab, aa] = tactical.allies.color;
+                let feed_position = self.settings.combat.feed_position;
                 crate::combat::ui::overlays(
                     &ctx,
                     &p,
@@ -15712,6 +15714,10 @@ impl App {
                     egui::Color32::from_rgba_unmultiplied(ar, ag, ab, aa),
                     &self.ui_images,
                 );
+                // the test mode's drag moves the kill feed
+                if self.settings.combat.feed_position != feed_position {
+                    self.settings.maps.tactical.touch();
+                }
                 if let Some(press) = self.tactical_press
                     && press.wheel(self.settings.maps.tactical.hold_ms)
                 {
@@ -17272,6 +17278,9 @@ impl App {
                     }
                     result
                 };
+                if combat_result.changed {
+                    self.settings.maps.tactical.touch();
+                }
                 if let Some(job) = self.combat_window.take_export() {
                     self.export_marker_map(job);
                 }
@@ -20434,6 +20443,7 @@ impl ApplicationHandler for App {
                         self.settings.maps.tactical.session.capture_key = false;
                         if code != winit::keyboard::KeyCode::Escape {
                             self.settings.maps.tactical.key = format!("{code:?}");
+                            self.settings.maps.tactical.touch();
                         }
                         return;
                     }
