@@ -231,9 +231,10 @@ pub(crate) fn overlays(
                                 accent,
                             );
                         }
+                        let confirmed = crate::ui::combat_rewards::caps(tr!("combat-reward-confirmed"));
                         for (text, size, color) in [
                             (cfg.medal_name(award), 22.0 * scale, p.ink),
-                            (tr!("combat-reward-confirmed"), 11.0 * scale, p.muted),
+                            (confirmed.as_str(), 11.0 * scale, p.muted),
                         ] {
                             let (rect, _) = ui.allocate_exact_size(vec2(310.0 * scale, size + 4.0), egui::Sense::hover());
                             crate::ui::minimap::text_shadow(ui.painter(), rect.center(), Align2::CENTER_CENTER, text, size, color);

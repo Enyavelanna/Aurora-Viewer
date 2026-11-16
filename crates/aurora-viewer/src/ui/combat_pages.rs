@@ -128,7 +128,7 @@ fn overview_switches(c: &crate::combat::Settings, t: &Tactical) -> [bool; 11] {
     ]
 }
 
-fn overview(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, _d: &Settings) -> bool {
+fn overview(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> bool {
     let c = &s.combat;
     let t = &s.maps.tactical;
     let on = overview_switches(c, t).iter().filter(|v| **v).count();
@@ -172,6 +172,21 @@ fn overview(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, _d: &Settings) -> 
                     **changed |= switch_row(ui, p, &mut s.maps.tactical.share, tr!("tactical-share"), "");
                 });
             });
+            gap(ui);
+            // how mouselook handles while zoomed: with the main switches, not
+            // among the feedback of a kill
+            let c = &mut s.combat;
+            if Card::new("crosshair", tr!("combat-zoom-sensitivity"))
+                .help(tr!("combat-zoom-sensitivity-help"))
+                .modified(c.zoom_sensitivity != d.combat.zoom_sensitivity)
+                .show(ui, p, |ui| {
+                    **changed |= percent_row(ui, tr!("combat-zoom-sensitivity-slider"), "", &mut c.zoom_sensitivity, 0.0..=1.0);
+                })
+            {
+                before_combat(&mut s.maps.tactical, c, tr!("combat-zoom-sensitivity"));
+                c.zoom_sensitivity = d.combat.zoom_sensitivity;
+                **changed = true;
+            }
         },
     );
     changed
@@ -197,24 +212,12 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings, r: &
                 **changed = true;
             }
             gap(ui);
-            if Card::new("crosshair", tr!("combat-zoom-sensitivity"))
-                .help(tr!("combat-zoom-sensitivity-help"))
-                .modified(c.zoom_sensitivity != dc.zoom_sensitivity)
-                .show(ui, p, |ui| {
-                    **changed |= slider_row(ui, tr!("combat-zoom-sensitivity"), "", &mut c.zoom_sensitivity, 0.0..=1.0, "");
-                })
-            {
-                before_combat(&mut s.maps.tactical, c, tr!("combat-zoom-sensitivity"));
-                c.zoom_sensitivity = dc.zoom_sensitivity;
-                **changed = true;
-            }
-            gap(ui);
             let marker = (c.killmarker, c.marker_size, c.marker_seconds, c.marker_opacity, c.marker_color);
             let marker_default = (dc.killmarker, dc.marker_size, dc.marker_seconds, dc.marker_opacity, dc.marker_color);
             if Card::new("plus", tr!("combat-killmarker"))
                 .modified(marker != marker_default)
                 .show(ui, p, |ui| {
-                    **changed |= switch_row(ui, p, &mut c.killmarker, tr!("combat-killmarker"), "");
+                    **changed |= switch_row(ui, p, &mut c.killmarker, tr!("combat-killmarker-switch"), "");
                     let on = c.killmarker;
                     **changed |= under(ui, on, |ui| {
                         let mut any = slider_row(ui, tr!("combat-size"), "", &mut c.marker_size, 4.0..=80.0, "");
@@ -236,7 +239,7 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings, r: &
             if Card::new("volume", tr!("combat-kill-sound"))
                 .modified(sound != (dc.kill_sound, dc.kill_asset.clone(), dc.kill_volume))
                 .show(ui, p, |ui| {
-                    **changed |= switch_row(ui, p, &mut c.kill_sound, tr!("combat-kill-sound"), "");
+                    **changed |= switch_row(ui, p, &mut c.kill_sound, tr!("combat-kill-sound-switch"), "");
                     let on = c.kill_sound;
                     let mut test = None;
                     **changed |= under(ui, on, |ui| {
@@ -264,7 +267,7 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings, r: &
             if Card::new("list-details-filled", tr!("combat-feed"))
                 .modified(feed(c) != feed(dc))
                 .show(ui, p, |ui| {
-                    **changed |= switch_row(ui, p, &mut c.feed, tr!("combat-feed"), "");
+                    **changed |= switch_row(ui, p, &mut c.feed, tr!("combat-feed-switch"), "");
                     **changed |= switch_row(ui, p, &mut c.feed_test, tr!("combat-feed-test"), tr!("combat-feed-test-help"));
                     let on = c.feed;
                     **changed |= under(ui, on, |ui| {

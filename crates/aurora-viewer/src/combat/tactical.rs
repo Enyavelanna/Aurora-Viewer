@@ -1613,10 +1613,6 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
         if widgets::action_button(ui, p, "trash-filled", tr!("tactical-remove"), widgets::ActionKind::Danger, size).clicked() {
             remove = true;
         }
-        if widgets::action_button(ui, p, "device-floppy-filled", tr!("tactical-set-save"), flat, size).clicked() {
-            changed |= region.save(&cfg.markers);
-            changed |= region.save_layers(&cfg.layers);
-        }
     });
     // "Remove" asks first when the set holds markers (an empty one goes at
     // once); the removal can be undone either way

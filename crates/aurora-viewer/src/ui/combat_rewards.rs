@@ -36,8 +36,15 @@ fn family_name(family: Family) -> &'static str {
     }
 }
 
-pub(crate) fn family_label(award: Award) -> &'static str {
-    family_name(award.family())
+/// A heading in capitals. The catalogue holds the words in plain case, so
+/// that a translator writes a meaning and not a look; a script without
+/// capitals (Japanese) is left as it is.
+pub(crate) fn caps(text: &str) -> String {
+    text.to_uppercase()
+}
+
+pub(crate) fn family_label(award: Award) -> String {
+    caps(family_name(award.family()))
 }
 
 /// What earns the medal, in a sentence.
@@ -91,7 +98,7 @@ pub(crate) fn show(
                 widgets::picture(ui, &p, texture, Vec2::splat(92.0), icon(selected), tr!("combat-reward-no-image"));
                 ui.vertical(|ui| {
                     ui.label(
-                        RichText::new(tr!("combat-reward-studio"))
+                        RichText::new(caps(tr!("combat-reward-studio")))
                             .size(11.0)
                             .strong()
                             .color(accent(&p, selected)),
@@ -136,14 +143,15 @@ pub(crate) fn show(
 
         ui.add_space(8.0);
         let mut category = selected.family().index();
+        let families = Family::ALL.map(|family| caps(family_name(family)));
         if widgets::segmented(
             ui,
             &p,
             &mut category,
             &[
-                (tr!("combat-reward-family-rapid"), true),
-                (tr!("combat-reward-family-streak"), true),
-                (tr!("combat-reward-family-rivalry"), true),
+                (families[0].as_str(), true),
+                (families[1].as_str(), true),
+                (families[2].as_str(), true),
             ],
         ) {
             state.combat_reward_selected = Family::ALL[category].slots().start;
@@ -161,13 +169,12 @@ pub(crate) fn show(
         );
         let on = cfg.family_on[category];
         changed |= combat_cards::under(ui, on, |ui| {
-            combat_cards::slider_row(
+            combat_cards::percent_row(
                 ui,
                 tr!("combat-reward-family-volume"),
                 tr!("combat-reward-family-volume-help"),
                 &mut cfg.family_volume[category],
                 0.0..=1.0,
-                "",
             )
         });
 
@@ -272,4 +279,16 @@ pub(crate) fn show(
         });
     });
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_heading_takes_capitals_where_the_script_has_them() {
+        assert_eq!(caps("Award studio"), "AWARD STUDIO");
+        assert_eq!(caps("Événements"), "ÉVÉNEMENTS");
+        assert_eq!(caps("連続キル"), "連続キル", "no capitals to take");
+    }
 }
