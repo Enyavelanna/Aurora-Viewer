@@ -228,7 +228,7 @@ default {
             if (!gPaired || !llGetAttached() || sender != COMBAT_LOG_ID || llGetTime() > gCombatUntil) {
                 llListenRemove(gCombatListener); gCombatListener = 0; return;
             }
-            // Only official deaths are relayed. Damage has no effect in AuroraC2.
+            // Only official deaths are relayed. Damage has no effect here.
             list records;
             if (llJsonValueType(message, []) == JSON_ARRAY) records = llJson2List(message);
             else records = [message];
