@@ -1170,7 +1170,7 @@ impl Editor {
             ui.label(egui::RichText::new(self.tool.hint()).color(p.muted));
             let n = cfg.markers.iter().filter(|m| m.selected).count();
             if n > 0 {
-                ui.label(egui::RichText::new(tr!("combat-editor-selected", count = n.to_string())).color(p.violet_light));
+                ui.label(egui::RichText::new(tr!("combat-editor-selected", count = n)).color(p.violet_light));
             }
         });
     }
@@ -1580,22 +1580,17 @@ impl Editor {
             Panel::Map => 2,
             Panel::Set => 3,
         };
-        let marker_count = cfg.markers.len();
-        let sets = cfg
-            .current_region
-            .as_ref()
-            .and_then(|key| cfg.library.regions.iter().find(|r| &r.key == key))
-            .map_or(0, |r| r.sets.len());
-        if widgets::count_tabs(
+        // names only: with a count each, "Properties" was cut short, and the
+        // counts were of different things (the selection, markers, sets)
+        if widgets::segmented(
             ui,
             p,
-            "combat-editor-panel",
             &mut tab,
             &[
-                (tr!("combat-editor-properties"), selected(cfg).len()),
-                (tr!("combat-editor-layers"), marker_count),
-                (tr!("combat-editor-map"), 0),
-                (tr!("combat-editor-set"), sets),
+                (tr!("combat-editor-properties"), false),
+                (tr!("combat-editor-layers"), false),
+                (tr!("combat-editor-map"), false),
+                (tr!("combat-editor-set"), false),
             ],
         ) {
             self.panel = [Panel::Properties, Panel::Layers, Panel::Map, Panel::Set][tab.min(3)];
@@ -1647,7 +1642,7 @@ impl Editor {
         let title = if single {
             first.shape.label().to_owned()
         } else {
-            tr!("combat-editor-selected", count = picked.len().to_string()).to_owned()
+            tr!("combat-editor-selected", count = picked.len())
         };
         ui.label(egui::RichText::new(title).strong().size(14.0).color(p.ink));
         ui.add_space(4.0);

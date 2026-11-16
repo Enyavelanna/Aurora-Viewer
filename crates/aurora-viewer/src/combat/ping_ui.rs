@@ -98,7 +98,11 @@ pub(crate) fn active(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, identit
                     let name = if ping.own() {
                         tr!("ping-you").to_owned()
                     } else {
-                        identities.get(&ping.sender).cloned().unwrap_or_else(|| ping.sender.to_string())
+                        // a name not known yet reads "Resident", as over the world; the key is on hover
+                        identities
+                            .get(&ping.sender)
+                            .cloned()
+                            .unwrap_or_else(|| tr!("ping-resident").to_owned())
                     };
                     ui.horizontal_wrapped(|ui| {
                         ui.label(format!("{name} · {}", kind_name(ping.kind)))
@@ -133,7 +137,8 @@ pub(crate) fn active(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, identit
                                 if let Some(icon) = crate::ui::icons::global("check") {
                                     ui.add(egui::Image::new((icon.id(), egui::Vec2::splat(13.0))).tint(p.success));
                                 }
-                                ui.label(identities.get(id).cloned().unwrap_or_else(|| id.to_string()));
+                                ui.label(identities.get(id).cloned().unwrap_or_else(|| tr!("ping-resident").to_owned()))
+                                    .on_hover_text(id.to_string());
                             });
                         }
                     }

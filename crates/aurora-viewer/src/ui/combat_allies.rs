@@ -211,13 +211,21 @@ fn residents(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Conte
         ui.horizontal(|ui| {
             title(ui, p, "users", tr!("allies-residents"), Some(ticked));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::icon_button(ui, p, "user-minus", tr!("allies-clear"), ticked > 0) {
+                // with their words: the two icons, a person and a small plus
+                // or minus, were told apart by their tooltips only
+                let size = vec2(0.0, 24.0);
+                let flat = widgets::ActionKind::Flat;
+                if widgets::action_button_if(ui, p, "user-minus", tr!("allies-clear-short"), flat, size, ticked > 0)
+                    .on_hover_text(tr!("allies-clear"))
+                    .clicked()
+                {
                     view.confirm_clear = true;
                 }
-                // apart, so that adding everyone around is not a slip away
-                // from removing everyone
-                ui.add_space(18.0);
-                if widgets::icon_button(ui, p, "user-plus", tr!("allies-add-nearby"), !context.nearby.is_empty()) {
+                let around = !context.nearby.is_empty();
+                if widgets::action_button_if(ui, p, "user-plus", tr!("allies-add-nearby-short"), flat, size, around)
+                    .on_hover_text(tr!("allies-add-nearby"))
+                    .clicked()
+                {
                     for n in &context.nearby {
                         cfg.recipients.insert(n.id, true);
                     }

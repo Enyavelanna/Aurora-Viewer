@@ -4,6 +4,9 @@ use crate::{settings::Settings, theme::Palette};
 use aurora_i18n::tr;
 
 pub const WINDOW: &str = "combat_workspace";
+/// The column of the tabs: wide enough for the longest name (the French
+/// "Ensembles de marqueurs").
+const TABS_W: f32 = 196.0;
 /// The Allies tab, which the Sharing tab sends you to.
 pub(crate) const ALLIES_TAB: usize = 7;
 
@@ -80,7 +83,7 @@ impl CombatWindow {
                 widgets::divider(ui, p);
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
-                        ui.set_width(170.0);
+                        ui.set_width(TABS_W);
                         for (tab, (icon, label)) in [
                             ("layout-dashboard-filled", tr!("monitor-tab-overview")),
                             ("bolt-filled", tr!("combat-page-feedback")),
@@ -94,7 +97,8 @@ impl CombatWindow {
                         .into_iter()
                         .enumerate()
                         {
-                            if widgets::pill_tab_wide(ui, p, icon, label, self.tab == tab, 170.0, true, "").clicked() {
+                            // from the left edge, so the icons stand in one column
+                            if widgets::pill_tab(ui, p, icon, label, None, false, self.tab == tab, true).clicked() {
                                 self.tab = tab;
                             }
                         }

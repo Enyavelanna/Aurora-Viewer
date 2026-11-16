@@ -18113,7 +18113,13 @@ impl App {
                         self.camera.position,
                         !self.camera.mouselook() && !(self.avatar_studio.active && self.avatar_studio.animation_editor),
                         // Combat: no name tags over the crosshair in mouselook
-                        if self.settings.combat.enabled && self.camera.mouselook() {
+                        // nor under the ping wheel, whose centre says what a
+                        // release will do
+                        if self.settings.combat.enabled && self.camera.mouselook()
+                            || self
+                                .tactical_press
+                                .is_some_and(|press| press.wheel(self.settings.maps.tactical.hold_ms))
+                        {
                             ui::hud::AvatarTags::Hidden
                         } else {
                             ui::hud::avatar_tags(

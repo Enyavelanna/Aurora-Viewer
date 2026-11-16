@@ -2,7 +2,7 @@
 //! (`combat_cards`). They edit the settings directly: Combat's settings
 //! live in this window and nowhere else.
 use super::combat_cards::{
-    Card, asset_row, color_row, columns, field_row, gap, muted, notice_action, section, slider_row, switch_row, under,
+    Card, asset_row, color_row, columns, field_row, gap, muted, notice_action, percent_row, section, slider_row, switch_row, under,
 };
 use super::options::{OptionsResult, OptionsUi};
 use crate::combat::undo::{self, Undo};
@@ -218,8 +218,8 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings, r: &
                     let on = c.killmarker;
                     **changed |= under(ui, on, |ui| {
                         let mut any = slider_row(ui, tr!("combat-size"), "", &mut c.marker_size, 4.0..=80.0, "");
-                        any |= slider_row(ui, tr!("combat-duration"), "", &mut c.marker_seconds, 0.05..=2.0, "");
-                        any |= slider_row(ui, tr!("combat-opacity"), "", &mut c.marker_opacity, 0.0..=1.0, "");
+                        any |= slider_row(ui, tr!("combat-duration"), "", &mut c.marker_seconds, 0.05..=2.0, " s");
+                        any |= percent_row(ui, tr!("combat-opacity"), "", &mut c.marker_opacity, 0.0..=1.0);
                         any | color_row(ui, p, "hitmarker-color", tr!("common-color"), &mut c.marker_color, true)
                     });
                 })
@@ -242,7 +242,7 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings, r: &
                     **changed |= under(ui, on, |ui| {
                         let (any, play) = asset_row(ui, p, tr!("combat-asset"), &mut c.kill_asset, tr!("combat-test-sound"));
                         test = play;
-                        any | slider_row(ui, tr!("combat-volume"), "", &mut c.kill_volume, 0.0..=1.0, "")
+                        any | percent_row(ui, tr!("combat-volume"), "", &mut c.kill_volume, 0.0..=1.0)
                     });
                     if let Some(id) = test {
                         r.combat_test_sound = Some((id, c.kill_volume));
@@ -276,8 +276,8 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings, r: &
                         });
                         c.feed_style = style as u8;
                         any |= slider_row(ui, tr!("combat-size"), "", &mut c.feed_size, 9.0..=32.0, "");
-                        any |= slider_row(ui, tr!("combat-opacity"), "", &mut c.feed_opacity, 0.1..=1.0, "");
-                        any |= slider_row(ui, tr!("combat-duration"), "", &mut c.feed_seconds, 1.0..=30.0, "");
+                        any |= percent_row(ui, tr!("combat-opacity"), "", &mut c.feed_opacity, 0.1..=1.0);
+                        any |= slider_row(ui, tr!("combat-duration"), "", &mut c.feed_seconds, 1.0..=30.0, " s");
                         any |= slider_row(ui, tr!("combat-entries"), "", &mut c.feed_entries, 1..=20, "");
                         section(ui, p, tr!("combat-feed-section-filters"));
                         let mut filter = usize::from(c.feed_filter.min(crate::combat::feed::FILTER_ALLIES));
@@ -326,7 +326,7 @@ fn awards(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, 
             changed |= switch_row(ui, p, &mut c.voices, tr!("combat-voices"), "");
             let on = c.voices;
             changed |= under(ui, on, |ui| {
-                slider_row(ui, tr!("combat-volume"), "", &mut c.voice_volume, 0.0..=1.0, "")
+                percent_row(ui, tr!("combat-volume"), "", &mut c.voice_volume, 0.0..=1.0)
             });
             changed |= switch_row(ui, p, &mut c.medals, tr!("combat-medals"), "");
         })
@@ -626,7 +626,7 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                         **changed |= under(ui, on, |ui| {
                             let (any, play) = asset_row(ui, p, tr!("combat-sound-uuid"), &mut t.sound_asset, tr!("combat-test-sound"));
                             test = play;
-                            any | slider_row(ui, tr!("combat-volume"), "", &mut t.sound_volume, 0.0..=1.0, "")
+                            any | percent_row(ui, tr!("combat-volume"), "", &mut t.sound_volume, 0.0..=1.0)
                         });
                         if let Some(id) = test {
                             r.combat_test_sound = Some((id, t.sound_volume));

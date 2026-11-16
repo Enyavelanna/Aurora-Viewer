@@ -1589,14 +1589,19 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
             }
         });
     if let Some(set) = region.sets.iter_mut().find(|s| Some(s.id) == region.active) {
-        changed |= ui.text_edit_singleline(&mut set.name).changed();
+        // its label beside it: under the list, a bare field read as a second list
+        ui.horizontal(|ui| {
+            ui.label(tr!("tactical-set-name"));
+            changed |= ui.text_edit_singleline(&mut set.name).changed();
+        });
     }
     let mut remove = false;
     ui.horizontal_wrapped(|ui| {
         let size = egui::vec2(0.0, 26.0);
         let flat = widgets::ActionKind::Flat;
         if widgets::action_button(ui, p, "plus", tr!("tactical-set-new"), flat, size).clicked() {
-            region.add(tr!("tactical-set-default").into(), &[]);
+            // numbered, so that the list does not fill with sets of one name
+            region.add(tr!("tactical-set-numbered", number = region.sets.len() + 1), &[]);
             changed = true;
         }
         if widgets::action_button(ui, p, "copy-filled", tr!("tactical-set-duplicate"), flat, size).clicked() {

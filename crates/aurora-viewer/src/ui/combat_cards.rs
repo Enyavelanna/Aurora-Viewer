@@ -267,6 +267,18 @@ pub(crate) fn slider_row<T: egui::emath::Numeric>(
 }
 
 /// A colour row.
+/// A slider for a share of one (an opacity, a volume), shown and typed as
+/// a percentage: 70 %, not 0.700.
+pub(crate) fn percent_row(ui: &mut egui::Ui, label: &str, help: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>) -> bool {
+    let mut percent = (*value * 100.0).round() as i32;
+    let range = (*range.start() * 100.0).round() as i32..=(*range.end() * 100.0).round() as i32;
+    let changed = slider_row(ui, label, help, &mut percent, range, " %");
+    if changed {
+        *value = percent as f32 / 100.0;
+    }
+    changed
+}
+
 pub(crate) fn color_row(ui: &mut egui::Ui, p: &Palette, id: &str, label: &str, value: &mut [u8; 4], alpha: bool) -> bool {
     field_row(ui, label, "", |ui| widgets::color_button(ui, p, id, value, alpha).changed())
 }
