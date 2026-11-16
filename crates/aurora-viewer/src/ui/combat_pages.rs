@@ -1,7 +1,9 @@
 //! The seven tabs of the Combat window, each a dashboard of cards
 //! (`combat_cards`). They edit the settings directly: Combat's settings
 //! live in this window and nowhere else.
-use super::combat_cards::{Card, color_row, columns, field_row, gap, muted, notice, section, slider_row, switch_row, text_row, under};
+use super::combat_cards::{
+    Card, color_row, columns, field_row, gap, muted, notice_action, section, slider_row, switch_row, text_row, under,
+};
 use super::options::{OptionsResult, OptionsUi};
 use crate::combat::undo::{self, Undo};
 use crate::{combat::tactical::Settings as Tactical, settings::Settings, theme::Palette};
@@ -12,13 +14,23 @@ use std::time::Instant;
 pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, r: &mut OptionsResult, tab: usize) -> bool {
     let d = Settings::default();
     let mut changed = false;
-    // The Sharing and Allies tabs say themselves that they are unavailable.
-    if !s.combat.enabled && tab < 6 {
-        notice(ui, p, tr!("combat-off-notice"));
+    // A greyed tab says which switch is off and offers it: the first one
+    // missing, since the next only counts once it is on.
+    let t = &s.maps.tactical;
+    if let Some(off) = missing(tab, s.combat.enabled, t.tools_enabled, t.pings_enabled) {
+        let (text, action) = off.words(tab);
+        if notice_action(ui, p, text, action) {
+            match off {
+                Missing::Mode => s.combat.enabled = true,
+                Missing::Tools => s.maps.tactical.tools_enabled = true,
+                Missing::Pings => s.maps.tactical.pings_enabled = true,
+            }
+            changed = true;
+        }
         gap(ui);
     }
     ui.add_enabled_ui(s.combat.enabled || tab >= 6, |ui| {
-        changed = match tab {
+        changed |= match tab {
             0 => overview(ui, p, s, &d),
             1 => feedback(ui, p, s, &d),
             2 => awards(ui, p, s, st, r),
@@ -36,6 +48,49 @@ pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut Op
         };
     });
     changed
+}
+
+/// The switch a tab waits for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Missing {
+    /// Combat mode.
+    Mode,
+    /// The combat mini-map tools.
+    Tools,
+    /// Pings.
+    Pings,
+}
+
+/// The first switch that is off among those the tab needs, in the order
+/// they depend on each other. Every tab needs Combat mode; the mini-map,
+/// the marker sets, the pings, Sharing and Allies need the mini-map tools;
+/// the Pings tab needs pings. The overview holds these switches itself.
+fn missing(tab: usize, mode: bool, tools: bool, pings: bool) -> Option<Missing> {
+    if !mode {
+        Some(Missing::Mode)
+    } else if !tools && tab >= 3 {
+        Some(Missing::Tools)
+    } else if !pings && tab == 5 {
+        Some(Missing::Pings)
+    } else {
+        None
+    }
+}
+
+impl Missing {
+    /// What the notice says on this tab, and its button.
+    fn words(self, tab: usize) -> (&'static str, &'static str) {
+        match (self, tab) {
+            (Missing::Mode, 6) => (tr!("sharing-needs-mode"), tr!("combat-turn-on-mode")),
+            (Missing::Mode, 7) => (tr!("allies-needs-mode"), tr!("combat-turn-on-mode")),
+            (Missing::Mode, _) => (tr!("combat-off-notice"), tr!("combat-turn-on-mode")),
+            (Missing::Tools, 4) => (tr!("combat-sets-tools-off"), tr!("combat-turn-on-tools")),
+            (Missing::Tools, 6) => (tr!("sharing-needs-tools"), tr!("combat-turn-on-tools")),
+            (Missing::Tools, 7) => (tr!("allies-needs-tools"), tr!("combat-turn-on-tools")),
+            (Missing::Tools, _) => (tr!("combat-tools-off-notice"), tr!("combat-turn-on-tools")),
+            (Missing::Pings, _) => (tr!("combat-pings-off-notice"), tr!("combat-turn-on-pings")),
+        }
+    }
 }
 
 /// A card's Combat settings are about to go back to their defaults: keep
@@ -360,6 +415,13 @@ fn minimap(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi,
                 .modified(colours)
                 .reset_tip(tr!("combat-reset-colours-tip", count = badge_text as i64));
             let card = if badge_text > 0 { card.badge(badge_text.to_string()) } else { card };
+            if !tools_off(s) && !s.maps.tactical.dots_enabled {
+                if notice_action(ui, p, tr!("combat-dots-off-notice"), tr!("combat-turn-on-dots")) {
+                    s.maps.tactical.dots_enabled = true;
+                    **changed = true;
+                }
+                gap(ui);
+            }
             ui.add_enabled_ui(!off, |ui| {
                 if card.show(ui, p, |ui| {
                     **changed |= crate::combat::tactical::avatar_colors(ui, p, &st.tactical_context, &mut s.maps.tactical);
@@ -581,4 +643,32 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
         },
     );
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_greyed_tab_names_the_first_switch_that_is_off() {
+        // Combat mode comes first, on every tab
+        for tab in 0..8 {
+            assert_eq!(missing(tab, false, false, false), Some(Missing::Mode), "tab {tab}");
+            assert_eq!(missing(tab, true, true, true), None, "tab {tab}");
+        }
+        // the overview, feedback and awards do not wait for the mini-map tools
+        for tab in 0..3 {
+            assert_eq!(missing(tab, true, false, false), None, "tab {tab}");
+        }
+        // the mini-map, the sets, the pings, Sharing and Allies do
+        for tab in 3..8 {
+            assert_eq!(missing(tab, true, false, true), Some(Missing::Tools), "tab {tab}");
+        }
+        // pings only matter on their own tab, once the tools are on
+        assert_eq!(missing(5, true, true, false), Some(Missing::Pings));
+        assert_eq!(missing(5, true, false, false), Some(Missing::Tools));
+        for tab in [3, 4, 6, 7] {
+            assert_eq!(missing(tab, true, true, false), None, "tab {tab}");
+        }
+    }
 }

@@ -1,7 +1,7 @@
 //! The Sharing tab of the Combat window: who receives your pings and marker
 //! sets, whom you accept them from, what is on its way and what arrived.
 //! The rules themselves live in `app/bridge.rs`; this page only shows them.
-use super::combat_cards::{badge, muted, notice, pill};
+use super::combat_cards::{badge, muted, pill};
 use crate::{
     combat::tactical::{Context, Settings},
     theme::Palette,
@@ -25,10 +25,6 @@ pub(crate) fn show(
     // Each card says whether it changed a setting: sending a set or
     // dismissing a received one touches the session only.
     let mut changed = false;
-    if !available {
-        notice(ui, p, tr!("sharing-unavailable"));
-        ui.add_space(8.0);
-    }
     ui.add_enabled_ui(available, |ui| {
         changed |= header(ui, p, cfg, context);
         ui.add_space(10.0);

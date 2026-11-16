@@ -149,12 +149,20 @@ pub(crate) fn muted(ui: &mut egui::Ui, p: &Palette, text: &str) {
     ui.add(egui::Label::new(RichText::new(text).size(11.5).color(p.muted)).wrap());
 }
 
-/// A framed warning line.
-pub(crate) fn notice(ui: &mut egui::Ui, p: &Palette, text: &str) {
+/// A warning line with the button that puts it right: what is switched off,
+/// and the switch itself, so that a greyed tab says why and how to wake it.
+/// True when the button was pressed.
+pub(crate) fn notice_action(ui: &mut egui::Ui, p: &Palette, text: &str, action: &str) -> bool {
+    let mut pressed = false;
     widgets::surface(ui, p, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new(text).color(p.warn));
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(text).color(p.warn));
+            let size = vec2(0.0, 24.0);
+            pressed = widgets::action_button(ui, p, "toggle-right-filled", action, widgets::ActionKind::Flat, size).clicked();
+        });
     });
+    pressed
 }
 
 /// A small rounded label.

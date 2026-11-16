@@ -4,7 +4,7 @@
 //! theirs, and the mini-map draws them in their own colour. The rules live in
 //! `combat/allies.rs`; the pings are sent by `app/bridge.rs`.
 use super::{
-    combat_cards::{badge, color_row, muted, notice, switch_row},
+    combat_cards::{badge, color_row, muted, switch_row},
     combat_sharing::{tile, title},
 };
 use crate::{
@@ -51,10 +51,6 @@ pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: 
     // Each card says whether it changed a setting.
     let mut changed = false;
     let declared_before = declared(cfg);
-    if !available {
-        notice(ui, p, tr!("allies-unavailable"));
-        ui.add_space(8.0);
-    }
     ui.add_enabled_ui(available, |ui| {
         changed |= header(ui, p, cfg, context);
         ui.add_space(10.0);
