@@ -2,7 +2,7 @@
 //! (`combat_cards`). They edit the settings directly: Combat's settings
 //! live in this window and nowhere else.
 use super::combat_cards::{
-    Card, color_row, columns, field_row, gap, muted, notice_action, section, slider_row, switch_row, text_row, under,
+    Card, asset_row, color_row, columns, field_row, gap, muted, notice_action, section, slider_row, switch_row, under,
 };
 use super::options::{OptionsResult, OptionsUi};
 use crate::combat::undo::{self, Undo};
@@ -32,11 +32,11 @@ pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut Op
     ui.add_enabled_ui(s.combat.enabled || tab >= 6, |ui| {
         changed |= match tab {
             0 => overview(ui, p, s, &d),
-            1 => feedback(ui, p, s, &d),
+            1 => feedback(ui, p, s, &d, r),
             2 => awards(ui, p, s, st, r),
             3 => minimap(ui, p, s, st, &d),
             4 => marker_sets(ui, p, s, st),
-            5 => pings(ui, p, s, st, &d),
+            5 => pings(ui, p, s, st, &d, r),
             6 => {
                 let available = s.combat.enabled && s.maps.tactical.tools_enabled;
                 super::combat_sharing::show(ui, p, &mut s.maps.tactical, &st.tactical_context, available, &mut st.combat_goto)
@@ -171,12 +171,12 @@ fn overview(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, _d: &Settings) -> 
     changed
 }
 
-fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> bool {
+fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings, r: &mut OptionsResult) -> bool {
     let mut changed = false;
     columns(
         ui,
-        &mut (s, &mut changed),
-        |ui, (s, changed)| {
+        &mut (s, &mut changed, r),
+        |ui, (s, changed, _)| {
             let c = &mut s.combat;
             let dc = &d.combat;
             if Card::new("history", tr!("combat-journal-title"))
@@ -223,7 +223,7 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                 **changed = true;
             }
         },
-        |ui, (s, changed)| {
+        |ui, (s, changed, r)| {
             let c = &mut s.combat;
             let dc = &d.combat;
             let sound = (c.kill_sound, c.kill_asset.clone(), c.kill_volume);
@@ -232,10 +232,15 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                 .show(ui, p, |ui| {
                     **changed |= switch_row(ui, p, &mut c.kill_sound, tr!("combat-kill-sound"), "");
                     let on = c.kill_sound;
+                    let mut test = None;
                     **changed |= under(ui, on, |ui| {
-                        let any = text_row(ui, tr!("combat-asset"), "", &mut c.kill_asset);
+                        let (any, play) = asset_row(ui, p, tr!("combat-asset"), &mut c.kill_asset, tr!("combat-test-sound"));
+                        test = play;
                         any | slider_row(ui, tr!("combat-volume"), "", &mut c.kill_volume, 0.0..=1.0, "")
                     });
+                    if let Some(id) = test {
+                        r.combat_test_sound = Some((id, c.kill_volume));
+                    }
                 })
             {
                 before_combat(&mut s.maps.tactical, c, tr!("combat-kill-sound"));
@@ -487,12 +492,12 @@ fn marker_sets(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut Option
     changed
 }
 
-fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d: &Settings) -> bool {
+fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d: &Settings, r: &mut OptionsResult) -> bool {
     let mut changed = false;
     columns(
         ui,
-        &mut (s, st, &mut changed),
-        |ui, (s, _, changed)| {
+        &mut (s, st, &mut changed, r),
+        |ui, (s, _, changed, _)| {
             let off = tools_off(s);
             let t = &mut s.maps.tactical;
             let dt = &d.maps.tactical;
@@ -585,7 +590,7 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                 }
             });
         },
-        |ui, (s, st, changed)| {
+        |ui, (s, st, changed, r)| {
             let off = tools_off(s) || !s.maps.tactical.pings_enabled;
             let t = &mut s.maps.tactical;
             let dt = &d.maps.tactical;
@@ -611,10 +616,15 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                     .show(ui, p, |ui| {
                         **changed |= switch_row(ui, p, &mut t.ping_sound, tr!("ping-sound"), "");
                         let on = t.ping_sound;
+                        let mut test = None;
                         **changed |= under(ui, on, |ui| {
-                            let any = text_row(ui, tr!("combat-sound-uuid"), "", &mut t.sound_asset);
+                            let (any, play) = asset_row(ui, p, tr!("combat-sound-uuid"), &mut t.sound_asset, tr!("combat-test-sound"));
+                            test = play;
                             any | slider_row(ui, tr!("combat-volume"), "", &mut t.sound_volume, 0.0..=1.0, "")
                         });
+                        if let Some(id) = test {
+                            r.combat_test_sound = Some((id, t.sound_volume));
+                        }
                     })
                 {
                     before_tactical(t, tr!("ping-group-sound"));

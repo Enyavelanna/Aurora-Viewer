@@ -10641,8 +10641,7 @@ impl App {
             let cfg = &self.settings.combat;
             if event.own_kill(self.world.agent_id)
                 && cfg.kill_sound
-                && let Ok(id) = uuid::Uuid::parse_str(&cfg.kill_asset)
-                && !id.is_nil()
+                && let crate::ui::combat_cards::AssetId::Id(id) = crate::ui::combat_cards::asset_id(&cfg.kill_asset)
             {
                 self.scene.sounds.play_ui_gain(self.audio_engine.as_ref(), id, cfg.kill_volume);
             }
@@ -20762,6 +20761,9 @@ impl App {
                 };
                 if let Some(job) = self.combat_window.take_export() {
                     self.export_marker_map(job);
+                }
+                if let Some((id, volume)) = combat_result.combat_test_sound {
+                    self.scene.sounds.play_ui_gain(self.audio_engine.as_ref(), id, volume);
                 }
                 if let Some(slot) = combat_result.combat_preview
                     && let Some(&award) = crate::combat::awards::Award::ALL.get(slot)

@@ -272,15 +272,70 @@ pub(crate) fn color_row(ui: &mut egui::Ui, p: &Palette, id: &str, label: &str, v
 }
 
 /// A one-line text box row (an asset UUID).
-pub(crate) fn text_row(ui: &mut egui::Ui, label: &str, help: &str, value: &mut String) -> bool {
-    field_row(ui, label, help, |ui| {
-        ui.add(
-            egui::TextEdit::singleline(value)
-                .desired_width(240.0)
-                .font(egui::TextStyle::Monospace),
-        )
-        .changed()
-    })
+/// What a field for an asset id holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AssetId {
+    /// Nothing: no sound, no image.
+    Empty,
+    /// An id that can be asked for.
+    Id(uuid::Uuid),
+    /// Words that are no id, or the null id: nothing would play or show.
+    Wrong,
+}
+
+/// Reads a field for an asset id, the spaces around it left aside.
+pub(crate) fn asset_id(value: &str) -> AssetId {
+    let value = value.trim();
+    if value.is_empty() {
+        return AssetId::Empty;
+    }
+    match uuid::Uuid::parse_str(value) {
+        Ok(id) if !id.is_nil() => AssetId::Id(id),
+        _ => AssetId::Wrong,
+    }
+}
+
+/// The spaces a paste brings around an id go: with them the id would be
+/// kept and never found.
+pub(crate) fn tidy_asset(value: &mut String) {
+    if value.trim().len() != value.len() {
+        *value = value.trim().to_owned();
+    }
+}
+
+/// The line under a field whose words are no id: said at once, where a
+/// sound that never plays would say nothing.
+pub(crate) fn asset_note(ui: &mut egui::Ui, p: &Palette, value: &str) {
+    if asset_id(value) == AssetId::Wrong {
+        ui.add(egui::Label::new(RichText::new(aurora_i18n::tr!("combat-asset-wrong")).size(11.5).color(p.warn)).wrap());
+    }
+}
+
+/// A field for the id of a sound, with the button that plays it. True when
+/// the field changed, and the id to play when the button was pressed.
+pub(crate) fn asset_row(ui: &mut egui::Ui, p: &Palette, label: &str, value: &mut String, test: &str) -> (bool, Option<uuid::Uuid>) {
+    let mut play = None;
+    let changed = field_row(ui, label, "", |ui| {
+        let id = asset_id(value);
+        if widgets::icon_button(ui, p, "player-play-filled", test, matches!(id, AssetId::Id(_)))
+            && let AssetId::Id(id) = id
+        {
+            play = Some(id);
+        }
+        let changed = ui
+            .add(
+                egui::TextEdit::singleline(value)
+                    .desired_width(240.0)
+                    .font(egui::TextStyle::Monospace),
+            )
+            .changed();
+        if changed {
+            tidy_asset(value);
+        }
+        changed
+    });
+    asset_note(ui, p, value);
+    (changed, play)
 }
 
 /// The rows behind a switch: greyed while it is off, set in a little.
@@ -320,4 +375,33 @@ pub(crate) fn columns<T>(
 /// The gap between two stacked cards.
 pub(crate) fn gap(ui: &mut egui::Ui) {
     ui.add_space(10.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_field_for_an_asset_tells_an_id_from_words_and_from_nothing() {
+        let id = "01234567-89ab-cdef-0123-456789abcdef";
+        assert_eq!(asset_id(""), AssetId::Empty);
+        assert_eq!(asset_id("   "), AssetId::Empty);
+        assert_eq!(asset_id(id), AssetId::Id(uuid::Uuid::parse_str(id).expect("id")));
+        // a paste often brings a space or a line end with it
+        assert_eq!(asset_id(&format!(" {id}\n")), asset_id(id));
+        // one character short, a name, the null id: nothing would play
+        assert_eq!(asset_id(&id[..35]), AssetId::Wrong);
+        assert_eq!(asset_id("kill sound"), AssetId::Wrong);
+        assert_eq!(asset_id("00000000-0000-0000-0000-000000000000"), AssetId::Wrong);
+    }
+
+    #[test]
+    fn a_pasted_id_loses_the_spaces_around_it_and_nothing_else() {
+        let mut value = "  01234567-89ab-cdef-0123-456789abcdef \n".to_owned();
+        tidy_asset(&mut value);
+        assert_eq!(value, "01234567-89ab-cdef-0123-456789abcdef");
+        let mut words = "not an id".to_owned();
+        tidy_asset(&mut words);
+        assert_eq!(words, "not an id", "what is typed stays, to be corrected");
+    }
 }

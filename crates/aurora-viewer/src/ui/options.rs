@@ -680,6 +680,8 @@ pub struct OptionsResult {
     pub audio_changed: bool,
     /// A Combat 2.0 reward row requested its configured sound/image preview.
     pub combat_preview: Option<usize>,
+    /// A Combat sound field asked for its sound, at this volume.
+    pub combat_test_sound: Option<(uuid::Uuid, f32)>,
     /// List the audio devices again.
     pub refresh_devices: bool,
     /// Every setting went back to its default.

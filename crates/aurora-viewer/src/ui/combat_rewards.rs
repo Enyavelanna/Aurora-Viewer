@@ -253,11 +253,15 @@ pub(crate) fn show(
                     changed |= ui
                         .add(egui::TextEdit::singleline(&mut cfg.announcement_assets[slot]).hint_text(tr!("combat-reward-optional-sound")))
                         .changed();
+                    super::combat_cards::tidy_asset(&mut cfg.announcement_assets[slot]);
+                    super::combat_cards::asset_note(ui, &p, &cfg.announcement_assets[slot]);
                     ui.add_space(8.0);
                     ui.label(RichText::new(tr!("combat-medal-image-uuid")).strong());
                     changed |= ui
                         .add(egui::TextEdit::singleline(&mut cfg.medal_textures[slot]).hint_text(tr!("combat-reward-optional-image")))
                         .changed();
+                    super::combat_cards::tidy_asset(&mut cfg.medal_textures[slot]);
+                    super::combat_cards::asset_note(ui, &p, &cfg.medal_textures[slot]);
                 });
             });
         });

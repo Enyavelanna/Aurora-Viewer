@@ -119,6 +119,7 @@ impl CombatWindow {
                             let mut r = options::OptionsResult::default();
                             result.changed |= super::combat_pages::show(ui, p, settings, &mut self.controls, &mut r, self.tab);
                             result.combat_preview = r.combat_preview;
+                            result.combat_test_sound = r.combat_test_sound;
                         });
                         if let Some(tab) = self.controls.combat_goto.take() {
                             self.tab = tab;

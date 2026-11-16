@@ -313,7 +313,7 @@ impl App {
             }
             if std::mem::take(&mut cfg.session.sound_pending)
                 && cfg.ping_sound
-                && let Ok(id) = Uuid::parse_str(&cfg.sound_asset)
+                && let crate::ui::combat_cards::AssetId::Id(id) = crate::ui::combat_cards::asset_id(&cfg.sound_asset)
             {
                 self.scene.sounds.play_ui_gain(self.audio_engine.as_ref(), id, cfg.sound_volume);
             }
