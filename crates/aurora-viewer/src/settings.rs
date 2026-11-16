@@ -977,6 +977,14 @@ pub struct Settings {
     /// CloseChatOnReturn off). On by default (human choice of 2026-10-16);
     /// off, the bar lets go after sending.
     pub chat_keep_focus: bool,
+    /// Aurora extension, Enter toggles typing: Enter on an empty field gives
+    /// the keyboard back to the world in every conversation too (IMs and
+    /// group chats), not only in the nearby chat. Off by default.
+    pub chat_enter_toggles: bool,
+    /// Aurora extension, Enter returns to the last chat field used: from the
+    /// world, Enter focuses the conversation last talked in when its window
+    /// is open, instead of always the chat bar. Off by default.
+    pub chat_enter_last_field: bool,
     /// The nearby chat fields complete a gesture's trigger after `/`, with
     /// the list of the matching ones (FSChatbarGestureAutoCompleteEnable, on).
     pub chat_gesture_autocomplete: bool,
@@ -2416,6 +2424,8 @@ impl Default for Settings {
             blocked_chat: BlockedChat::Hidden,
             mark_unnamed_objects: false,
             chat_keep_focus: true,
+            chat_enter_toggles: false,
+            chat_enter_last_field: false,
             chat_gesture_autocomplete: true,
             chat_name_prediction: true,
             colon_emote: false,
@@ -3873,6 +3883,16 @@ impl Settings {
     }
 }
 
+/// How the minimap displays avatar names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MiniAvatarNameFormat {
+    Display,
+    Legacy,
+    #[default]
+    DisplayAndLegacy,
+    LegacyAndDisplay,
+}
+
 /// Mini-map (LLNetMap) and world map (LLFloaterWorldMap) options, with the
 /// Firestorm defaults.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -3881,6 +3901,8 @@ pub struct MapSettings {
     pub(crate) tactical: crate::combat::tactical::Settings,
     /// MiniMapScale: pixels per region, 32..4096.
     pub mini_scale: f32,
+    /// Avatar name format in minimap tooltips and avatar menus.
+    pub mini_avatar_name_format: MiniAvatarNameFormat,
     /// MiniMapRotate: camera direction at the top (else north).
     pub mini_rotate: bool,
     /// MiniMapObjects.
@@ -3929,6 +3951,7 @@ impl Default for MapSettings {
         MapSettings {
             tactical: Default::default(),
             mini_scale: 128.0,
+            mini_avatar_name_format: MiniAvatarNameFormat::DisplayAndLegacy,
             // forced to north-up at the first login (llnetmap.cpp)
             mini_rotate: false,
             mini_objects: true,
