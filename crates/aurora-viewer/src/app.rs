@@ -18967,6 +18967,7 @@ impl App {
                 self.settings.maps.tactical.prune();
                 crate::combat::tactical::world_overlay(
                     &ctx,
+                    &p,
                     projector,
                     &self.world,
                     &mut self.settings.maps.tactical,

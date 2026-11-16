@@ -2,6 +2,7 @@
 //! Layout is independent of simulation latency and does not send any packets.
 use super::tactical::{Ping, Settings, paint_icon};
 use crate::{
+    theme::Palette,
     ui::{hud::Projector, minimap::text_shadow},
     world::World,
 };
@@ -11,6 +12,11 @@ use std::time::Instant;
 
 const SECTORS: usize = 8;
 const MAX_GUIDES: usize = 4;
+/// The room between a label's text and the edge of its plate.
+const PLATE_PAD: Vec2 = vec2(7.0, 3.0);
+/// The opacity from which the plate makes a label read over anything
+/// (WCAG 1.4.3, 4.5:1): the slider's help gives it as a percentage.
+pub(crate) const READABLE_PLATE: f32 = 0.7;
 
 #[derive(Debug, Clone, Copy)]
 enum Location {
@@ -130,7 +136,7 @@ fn guides(groups: [Vec<Guide<'_>>; SECTORS]) -> Vec<Guide<'_>> {
     visible
 }
 
-pub(super) fn show(ctx: &egui::Context, projector: &Projector, world: &World, cfg: &Settings, mouselook: bool) {
+pub(super) fn show(ctx: &egui::Context, p: &Palette, projector: &Projector, world: &World, cfg: &Settings, mouselook: bool) {
     let area = crate::ui::layout::work_area(ctx);
     // Leave room for the glyph, arrow and label inside the work area, including
     // the top/bottom Aurora bars. Never reserve or intercept pointer input.
@@ -164,7 +170,7 @@ pub(super) fn show(ctx: &egui::Context, projector: &Projector, world: &World, cf
         // With guidance off retain the original projection and HUD behaviour.
         if !cfg.offscreen_pings {
             if let Some((at, _)) = projector.project(position) {
-                paint_world(&painter, at, ping, distance, color, cfg, world, 1, aim, &[]);
+                paint_world(&painter, p, at, ping, distance, color, cfg, world, 1, aim, &[]);
             }
             continue;
         }
@@ -179,6 +185,7 @@ pub(super) fn show(ctx: &egui::Context, projector: &Projector, world: &World, cf
         let c = group.ping.marker.color;
         occupied.push(paint_world(
             &painter,
+            p,
             group.at,
             group.ping,
             group.distance,
@@ -219,13 +226,52 @@ pub(super) fn show(ctx: &egui::Context, projector: &Projector, world: &World, cf
         } else {
             (vec2(0.0, 20.0), Align2::CENTER_TOP)
         };
-        let size = painter
-            .layout_no_wrap(label.clone(), egui::FontId::proportional(12.0), color)
-            .size();
+        let size = plate_size(&painter, p, &label, 12.0, cfg.label_plate);
         if let Some(position) = label_position(area, at + offset, align, size, &occupied) {
-            occupied.push(text_shadow(&painter, position, align, &label, 12.0, color));
+            occupied.push(plate(&painter, p, position, align, &label, 12.0, color, cfg.label_plate));
         }
     }
+}
+
+/// The size a label takes: its text, and the plate's margin when it has one.
+fn plate_size(painter: &egui::Painter, p: &Palette, text: &str, size: f32, opacity: f32) -> Vec2 {
+    let text = painter
+        .layout_no_wrap(text.to_owned(), egui::FontId::proportional(size), p.ink)
+        .size();
+    if opacity > 0.0 { text + PLATE_PAD * 2.0 } else { text }
+}
+
+/// A ping's label. `opacity` is the person's choice (Combat > Pings > On
+/// screen): at 0 the label is in the ping's colour straight over the world,
+/// which hides nothing but reads badly over a pale wall; above, it is the
+/// interface's ink on a plate of that opacity, edged in the ping's colour,
+/// which reads over anything once the plate is dark enough. The space it
+/// takes.
+#[allow(clippy::too_many_arguments)]
+fn plate(
+    painter: &egui::Painter,
+    p: &Palette,
+    position: Pos2,
+    align: Align2,
+    text: &str,
+    size: f32,
+    accent: Color32,
+    opacity: f32,
+) -> Rect {
+    if opacity <= 0.0 {
+        return text_shadow(painter, position, align, text, size, accent);
+    }
+    let rect = align.anchor_size(position, plate_size(painter, p, text, size, opacity));
+    let radius = painter.ctx().global_style().visuals.widgets.inactive.corner_radius;
+    painter.rect_filled(rect, radius, plate_face(p, opacity));
+    painter.rect_stroke(rect, radius, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
+    painter.text(rect.center(), Align2::CENTER_CENTER, text, egui::FontId::proportional(size), p.ink);
+    rect
+}
+
+/// The plate's colour: the panel's, as opaque as asked.
+fn plate_face(p: &Palette, opacity: f32) -> Color32 {
+    p.panel.gamma_multiply(opacity.clamp(0.0, 1.0))
 }
 
 fn label_position(area: Rect, desired: Pos2, align: Align2, size: Vec2, occupied: &[Rect]) -> Option<Pos2> {
@@ -241,6 +287,7 @@ fn label_position(area: Rect, desired: Pos2, align: Align2, size: Vec2, occupied
 #[allow(clippy::too_many_arguments)]
 fn paint_world(
     painter: &egui::Painter,
+    p: &Palette,
     at: Pos2,
     ping: &Ping,
     distance: f32,
@@ -259,12 +306,10 @@ fn paint_world(
         label.push_str(&format!("  +{}", count - 1));
     }
     let desired = at + vec2(0.0, cfg.size + 4.0);
-    let size = painter
-        .layout_no_wrap(label.clone(), egui::FontId::proportional(13.0), color)
-        .size();
+    let size = plate_size(&painter, p, &label, 13.0, cfg.label_plate);
     let area = crate::ui::layout::work_area(painter.ctx());
     if let Some(position) = label_position(area, desired, Align2::CENTER_TOP, size, occupied) {
-        text_shadow(&painter, position, Align2::CENTER_TOP, &label, 13.0, color)
+        plate(&painter, p, position, Align2::CENTER_TOP, &label, 13.0, color, cfg.label_plate)
     } else {
         Rect::from_center_size(at, Vec2::splat(cfg.size * 2.0))
     }
@@ -334,6 +379,34 @@ pub(super) fn aimed(ctx: &egui::Context, projector: &Projector, world: &World, c
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WCAG relative luminance of an opaque colour.
+    fn luminance(c: [f32; 3]) -> f32 {
+        let f = |v: f32| if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
+    }
+
+    /// The plate as it shows over an opaque `behind` (premultiplied blend).
+    fn over(face: Color32, behind: f32) -> [f32; 3] {
+        let alpha = f32::from(face.a()) / 255.0;
+        [face.r(), face.g(), face.b()].map(|v| f32::from(v) / 255.0 + behind * (1.0 - alpha))
+    }
+
+    #[test]
+    fn a_ping_label_reads_on_a_dark_plate_over_a_white_wall_and_over_the_night() {
+        // WCAG 1.4.3: 4.5:1 for text of this size, whatever lies behind,
+        // from the opacity the slider's help names
+        let p = crate::theme::Theme::default().skin_palette();
+        let ink = luminance([p.ink.r(), p.ink.g(), p.ink.b()].map(|v| f32::from(v) / 255.0));
+        for behind in [0.0, 1.0] {
+            for opacity in [READABLE_PLATE, 1.0] {
+                let plate = luminance(over(plate_face(&p, opacity), behind));
+                let ratio = (ink.max(plate) + 0.05) / (ink.min(plate) + 0.05);
+                assert!(ratio >= 4.5, "ink on a {opacity} plate over {behind}: {ratio:.2}:1");
+            }
+        }
+        assert_eq!(Settings::default().label_plate, 0.0, "no plate unless the person asks for one");
+    }
     fn projector() -> Projector {
         Projector {
             view_proj: glam::camera::rh::proj::directx::perspective_infinite_reverse(1.0, 2.0, 0.1),

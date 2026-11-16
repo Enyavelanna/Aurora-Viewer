@@ -625,6 +625,9 @@ pub(crate) struct Settings {
     pub rotate_avatar: bool,
     pub pings_enabled: bool,
     pub offscreen_pings: bool,
+    /// How opaque the plate behind a ping's label is, 0 to 1. At 0 there is
+    /// none: the label is in the ping's colour, straight over the world.
+    pub label_plate: f32,
     pub labels: bool,
     pub distances: bool,
     pub size: f32,
@@ -678,6 +681,7 @@ impl Default for Settings {
             rotate_avatar: true,
             pings_enabled: false,
             offscreen_pings: true,
+            label_plate: 0.0,
             labels: true,
             distances: true,
             size: 8.0,
@@ -752,6 +756,7 @@ fn wheel_choice(delta: egui::Vec2) -> Option<usize> {
 }
 pub(crate) fn world_overlay(
     ctx: &egui::Context,
+    p: &Palette,
     projector: &crate::ui::hud::Projector,
     world: &World,
     cfg: &mut Settings,
@@ -761,7 +766,7 @@ pub(crate) fn world_overlay(
     if !cfg.available() || !cfg.pings_enabled {
         return;
     }
-    super::navigation::show(ctx, projector, world, cfg, mouselook);
+    super::navigation::show(ctx, p, projector, world, cfg, mouselook);
     cfg.session.aimed_ping = super::navigation::aimed(ctx, projector, world, cfg, mouselook);
 }
 impl Settings {

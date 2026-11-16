@@ -498,7 +498,7 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                 }
                 gap(ui);
                 if Card::new("eye-filled", tr!("ping-group-screen"))
-                    .modified((t.offscreen_pings, t.distances) != (dt.offscreen_pings, dt.distances))
+                    .modified((t.offscreen_pings, t.distances, t.label_plate) != (dt.offscreen_pings, dt.distances, dt.label_plate))
                     .show(ui, p, |ui| {
                         **changed |= switch_row(
                             ui,
@@ -508,10 +508,17 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                             tr!("tactical-offscreen-pings-help"),
                         );
                         **changed |= switch_row(ui, p, &mut t.distances, tr!("tactical-distances"), "");
+                        let mut percent = (t.label_plate.clamp(0.0, 1.0) * 100.0).round() as i32;
+                        let readable = (crate::combat::navigation::READABLE_PLATE * 100.0).round() as i64;
+                        let help = tr!("ping-label-plate-help", percent = readable);
+                        if slider_row(ui, tr!("ping-label-plate"), &help, &mut percent, 0..=100, " %") {
+                            t.label_plate = percent as f32 / 100.0;
+                            **changed = true;
+                        }
                     })
                 {
                     before_tactical(t, tr!("ping-group-screen"));
-                    (t.offscreen_pings, t.distances) = (dt.offscreen_pings, dt.distances);
+                    (t.offscreen_pings, t.distances, t.label_plate) = (dt.offscreen_pings, dt.distances, dt.label_plate);
                     **changed = true;
                 }
             });
