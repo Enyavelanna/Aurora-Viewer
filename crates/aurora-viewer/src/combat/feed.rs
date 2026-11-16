@@ -231,15 +231,26 @@ struct Look {
     dim: Color32,
 }
 
+/// How dense the base of a row is, under its tint: enough for the names to
+/// read over a bright scene, without hiding it.
+const BASE: f32 = 0.88;
+/// How much of its role's colour a row takes, over the base. Light enough
+/// for the second line (damage, weapon) to read at 4.5:1 on it (WCAG 1.4.3):
+/// at the 0.22 to 0.3 of before, it read at 2.1 to 2.6:1. The bar on the
+/// row's edge carries the role at full strength.
+const TINT_FRIENDLY: f32 = 0.10;
+const TINT_KILL: f32 = 0.18;
+const TINT_DEATH: f32 = 0.16;
+
 fn look(p: &Palette, e: &Entry, ally: Color32) -> Look {
     let (accent, back) = if e.friendly_fire {
-        (p.amber, p.amber.gamma_multiply(0.22))
+        (p.amber, p.amber.gamma_multiply(TINT_FRIENDLY))
     } else if e.killer_me {
-        (p.violet, p.violet.gamma_multiply(0.3))
+        (p.violet, p.violet.gamma_multiply(TINT_KILL))
     } else if e.victim_me {
-        (p.danger, p.danger.gamma_multiply(0.26))
+        (p.danger, p.danger.gamma_multiply(TINT_DEATH))
     } else {
-        (p.muted_dim, p.panel.gamma_multiply(0.88))
+        (p.muted_dim, p.panel.gamma_multiply(BASE))
     };
     let mine = e.killer_me || e.victim_me;
     let base = if mine { p.ink } else { p.muted };
@@ -257,7 +268,8 @@ fn look(p: &Palette, e: &Entry, ally: Color32) -> Look {
         back,
         killer: who(e.killer_me, e.killer_ally),
         victim: who(e.victim_me, e.victim_ally),
-        dim: if mine { p.muted } else { p.muted_dim },
+        // the second line, the arrow and "suicide": never dimmer than this
+        dim: p.muted,
     }
 }
 
@@ -408,7 +420,7 @@ pub(crate) fn show(ctx: &egui::Context, p: &Palette, cfg: &Settings, entries: &[
                 // `Color32::PLACEHOLDER` only) would leave the text opaque.
                 painter.set_opacity(alpha * cfg.feed_opacity.clamp(0.0, 1.0));
                 // a dense base so the names read over a bright scene, the role's tint over it
-                painter.rect_filled(row, radius, p.panel.gamma_multiply(0.88));
+                painter.rect_filled(row, radius, p.panel.gamma_multiply(BASE));
                 painter.rect_filled(row, radius, look.back);
                 let bar = Rect::from_min_size(row.min, vec2(if cfg.feed_style == STYLE_CARDS { 4.0 } else { 3.0 }, row.height()));
                 painter.rect_filled(bar, radius, look.accent);
@@ -539,6 +551,40 @@ mod tests {
         assert_eq!(fade(0.0, 6.0).0, 0.0);
         assert_eq!(fade(1.0, 6.0), (1.0, 0.0));
         assert!(fade(5.8, 6.0).0 < 0.5);
+    }
+
+    /// WCAG relative luminance of an opaque colour.
+    fn luminance(c: [f32; 3]) -> f32 {
+        let f = |v: f32| if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
+    }
+
+    /// `top` (premultiplied) over an opaque `under`.
+    fn over(top: Color32, under: [f32; 3]) -> [f32; 3] {
+        let alpha = f32::from(top.a()) / 255.0;
+        let top = [top.r(), top.g(), top.b()].map(|v| f32::from(v) / 255.0);
+        [0, 1, 2].map(|i| top[i] + under[i] * (1.0 - alpha))
+    }
+
+    #[test]
+    fn every_piece_of_a_row_reads_on_the_row() {
+        // WCAG 1.4.3, 4.5:1, on the row's own colours over a dark scene. The
+        // ally colour is the person's choice and is not held to it.
+        let p = crate::theme::Theme::default().skin_palette();
+        let ally = p.ink;
+        for e in sample() {
+            let look = look(&p, &e, ally);
+            let back = luminance(over(look.back, over(p.panel.gamma_multiply(BASE), [0.0; 3])));
+            let mut pieces = vec![("names", look.killer), ("names", look.victim), ("second line", look.dim)];
+            if e.friendly_fire {
+                pieces.push(("friendly fire", p.amber));
+            }
+            for (what, color) in pieces {
+                let text = luminance([color.r(), color.g(), color.b()].map(|v| f32::from(v) / 255.0));
+                let ratio = (text.max(back) + 0.05) / (text.min(back) + 0.05);
+                assert!(ratio >= 4.5, "{what} of {:?} → {}: {ratio:.2}:1", e.killer, e.victim);
+            }
+        }
     }
 
     #[test]
