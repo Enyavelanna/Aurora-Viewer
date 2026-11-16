@@ -1,5 +1,5 @@
 //! Aurora combat model. Simulator fields follow wiki.secondlife.com/wiki/Combat_Log.
-//! Medal rules are adapted from our KRS/KILLMARK hud/source/Core.inc (local beta).
+//! The medal rules are in `awards`.
 //! No legacy viewer hit grammar is accepted.
 use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, time::Instant};
@@ -124,7 +124,7 @@ impl Default for Settings {
             medals: false,
             voice_volume: 0.7,
             announcement_assets: vec![String::new(); awards::Award::ALL.len()],
-            // KRS_MedalPopup source art, excluding server-only Clean Sweep.
+            // The default medal images.
             // The order is Award::ALL, so every sound row has a matching image row.
             medal_textures: [
                 "68165772-e609-2897-5ae9-02eae412fa17", // Double

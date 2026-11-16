@@ -1,6 +1,5 @@
-//! Medals. Local KRS/KILLMARK rules, ported from hud/source/Core.inc and Effects.inc,
-//! then reduced to eleven medals in three families. Five seconds between kills of a
-//! combo is AuroraC2's requested rule (KRS used three).
+//! Medals: eleven, in three families. The kills of a combo are at most five
+//! seconds apart.
 use super::Outcome;
 use aurora_i18n::tr;
 use serde::{Deserialize, Serialize};
@@ -281,7 +280,7 @@ mod tests {
     const ME: Uuid = Uuid::from_u128(1);
     const OTHER: Uuid = Uuid::from_u128(2);
     #[test]
-    fn combat_krs_rapid_window_is_five_seconds_inclusive_and_death_resets_it() {
+    fn combat_rapid_window_is_five_seconds_inclusive_and_death_resets_it() {
         let mut t = Tracker::default();
         let now = Instant::now();
         assert!(t.accept(Outcome::Kill, ME, OTHER, now).is_empty());
@@ -304,7 +303,7 @@ mod tests {
         assert_eq!(got, vec![Award::Double, Award::Triple, Award::Quad, Award::Penta]);
     }
     #[test]
-    fn combat_krs_life_thresholds_fire_once_and_revenge_is_local() {
+    fn combat_life_thresholds_fire_once_and_revenge_is_local() {
         let now = Instant::now();
         let mut t = Tracker::default();
         let mut got = Vec::new();
@@ -323,7 +322,7 @@ mod tests {
         assert!(!t.accept(Outcome::Kill, ME, OTHER, now).contains(&Award::Revenge));
     }
     #[test]
-    fn combat_krs_domination_and_gap_do_not_invent_awards() {
+    fn combat_domination_and_gap_do_not_invent_awards() {
         let now = Instant::now();
         let mut t = Tracker::default();
         for _ in 0..4 {

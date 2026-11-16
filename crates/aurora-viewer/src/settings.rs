@@ -2974,7 +2974,7 @@ impl Settings {
                     .get("combat")
                     .is_some_and(|v| v.get("hitmarker").is_some() || v.get("hit_sound").is_some())
                 {
-                    let backup = path.with_extension("pre-krs.json");
+                    let backup = path.with_extension("pre-combat.json");
                     if !backup.exists()
                         && let Err(error) = std::fs::copy(path, &backup)
                     {

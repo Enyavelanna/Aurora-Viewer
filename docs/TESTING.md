@@ -84,7 +84,7 @@ expiry. Sharing is region-local and uses tactical protocol 2. Annotation
 limit is 256 and temporary ping display limit 64. Oversized/invalid outgoing
 annotations report a sharing error; group membership must finish loading.
 Markers persist; pings, sends and anchors do not. User data migration retains
-`settings.pre-krs.json`. No live-grid, Mono memory or simulator-CPU validation is
+`settings.pre-combat.json`. No live-grid, Mono memory or simulator-CPU validation is
 claimed by offline tests or static LSL lint.
 
 **Demo mode** simulates a server locally (a plaza, avatars, objects, chat,
