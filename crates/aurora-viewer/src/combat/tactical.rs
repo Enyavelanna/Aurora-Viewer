@@ -693,7 +693,8 @@ impl Default for Settings {
             markers: Vec::new(),
             layers: Layer::defaults(),
             colors: [[90, 180, 255, 255], [255, 70, 70, 255], [255, 200, 60, 255], [80, 240, 160, 255]],
-            icons: ["map-pin-filled", "user-filled", "map-pin-filled", "users-group"].map(str::to_owned),
+            // a flag for the objective: with the pin of a plain ping, only the colour told them apart
+            icons: ["map-pin-filled", "user-filled", "flag-filled", "users-group"].map(str::to_owned),
             seconds: 8.0,
             key: "KeyB".into(),
             hold_ms: 250.0,

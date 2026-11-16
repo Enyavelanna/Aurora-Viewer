@@ -129,14 +129,14 @@ fn summary(cfg: &Settings, context: &Context) -> String {
     } else {
         match ping_reach(cfg, context) {
             Some(0) => tr!("sharing-summary-pings-none").to_owned(),
-            Some(n) => tr!("sharing-summary-pings", count = n.to_string()),
+            Some(n) => tr!("sharing-summary-pings", count = n),
             None => tr!("sharing-group-loading").to_owned(),
         }
     };
     let receiving = if !cfg.receive_enabled {
         tr!("sharing-summary-not-receiving").to_owned()
     } else {
-        tr!("sharing-summary-accept", count = context.allies.len().to_string())
+        tr!("sharing-summary-accept", count = context.allies.len())
     };
     format!("{sending} · {receiving}")
 }
@@ -160,7 +160,7 @@ fn audience(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Contex
             (0, _) => tr!("sharing-pings-only-me").to_owned(),
             (_, None) => tr!("sharing-group-loading").to_owned(),
             (_, Some(0)) => tr!("sharing-pings-nobody").to_owned(),
-            (_, Some(n)) => tr!("sharing-summary-pings", count = n.to_string()),
+            (_, Some(n)) => tr!("sharing-summary-pings", count = n),
         };
         muted(ui, p, &reach);
     });
@@ -271,7 +271,7 @@ fn send_card(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Conte
         if let Some(reason) = reason {
             muted(ui, p, reason);
         } else if let Some(n) = reach {
-            muted(ui, p, &tr!("sharing-send-reach", count = n.to_string()));
+            muted(ui, p, &tr!("sharing-send-reach", count = n));
         }
         if !cfg.session.set_outgoing.is_empty() && cfg.session.set_total > 0 {
             let done = cfg.session.set_total - cfg.session.set_outgoing.len().min(cfg.session.set_total);

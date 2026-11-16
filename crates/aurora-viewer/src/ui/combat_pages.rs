@@ -110,26 +110,32 @@ fn tools_off(s: &Settings) -> bool {
     !s.combat.enabled || !s.maps.tactical.tools_enabled
 }
 
-fn overview(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, _d: &Settings) -> bool {
-    let c = &s.combat;
-    let t = &s.maps.tactical;
-    let on = [
+/// The switches the overview draws, in its order: its count says how many
+/// of these are on, so it never disagrees with what is under it.
+fn overview_switches(c: &crate::combat::Settings, t: &Tactical) -> [bool; 11] {
+    [
         c.journal,
+        c.show_tab,
         c.feed,
         c.killmarker,
         c.kill_sound,
         c.voices,
         c.medals,
+        t.tools_enabled,
         t.enabled,
         t.pings_enabled,
         t.share,
     ]
-    .iter()
-    .filter(|v| **v)
-    .count();
+}
+
+fn overview(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, _d: &Settings) -> bool {
+    let c = &s.combat;
+    let t = &s.maps.tactical;
+    let on = overview_switches(c, t).iter().filter(|v| **v).count();
+    let total = overview_switches(c, t).len();
     let mut changed = false;
     Card::new("swords", tr!("combat-preferences-title"))
-        .badge(tr!("combat-overview-count", count = on.to_string(), total = "9".to_owned()))
+        .badge(tr!("combat-overview-count", count = on, total = total))
         .help(tr!("combat-preferences-about"))
         .show(ui, p, |_| {});
     gap(ui);
@@ -658,6 +664,21 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_overview_counts_every_switch_it_draws() {
+        let on = |s: &Settings| overview_switches(&s.combat, &s.maps.tactical).iter().filter(|v| **v).count();
+        // the two the count used to leave out
+        let mut s = Settings::default();
+        s.combat.show_tab = true;
+        let with = on(&s);
+        s.combat.show_tab = false;
+        assert_eq!(with, on(&s) + 1, "the Combat tab in Conversations counts");
+        s.maps.tactical.tools_enabled = true;
+        let with = on(&s);
+        s.maps.tactical.tools_enabled = false;
+        assert_eq!(with, on(&s) + 1, "the mini-map tools count");
+    }
 
     #[test]
     fn a_greyed_tab_names_the_first_switch_that_is_off() {

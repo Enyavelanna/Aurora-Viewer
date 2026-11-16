@@ -15,7 +15,7 @@ ping-ready = Ready
 ping-release = Release
 ping-choose = Choose
 ping-wheel-help = Release to place · centre, Esc or right-click to cancel
-ping-gesture-help = Tap to place a ping; aim at a resident for Contact. Double-tap to turn your last ping into Contact. Hold for the ping wheel. Aim at a teammate’s ping and tap to respond; aim at your own to cancel it.
+ping-gesture-help = Tap to place a ping; aim at a resident for Contact. Double-tap to turn your last ping into Contact. Hold for the ping wheel. Aim at an ally’s ping and tap to respond; aim at your own to cancel it.
 ping-active = Active pings and responses
 ping-auto-contact = Choose Contact when aiming at a resident
 ping-double-tap = Double-tap turns a ping into Contact
@@ -15004,7 +15004,10 @@ combat-global = All
 combat-personal = Mine
 combat-status = Received: { $received } · Logged: { $recorded } · Saved: { $saved } · Missed: { $lost }
 combat-journal-error = The combat log could not be saved. This session’s events are still available.
-combat-loss = Combat: { $count } event(s) were missed. Kill streaks may be inaccurate.
+combat-loss = { $count ->
+    [one] Combat: { $count } event was missed. Kill streaks may be inaccurate.
+   *[other] Combat: { $count } events were missed. Kill streaks may be inaccurate.
+    }
 combat-rewards = Award announcements and medals
 combat-voices = Award announcement sounds
 combat-medals = Medal banner
@@ -15041,16 +15044,22 @@ sharing-needs-tools = The combat mini-map tools are off: nothing is shared.
 sharing-sending = Sending
 sharing-sending-help = Send your pings and marker sets.
 sharing-receiving = Receiving
-sharing-receiving-help = Accept pings and marker sets from teammates and your group.
+sharing-receiving-help = Accept pings and marker sets from your allies and your group.
 sharing-summary-off = Sharing is off: your pings and marker sets stay on your screen.
 sharing-summary-not-sending = Not sending
 sharing-summary-not-receiving = Not receiving
 sharing-summary-pings-none = Your pings stay on your screen
-sharing-summary-pings = Your pings reach { $count } resident(s)
-sharing-summary-accept = You accept from { $count } ally(ies)
+sharing-summary-pings = { $count ->
+    [one] Your pings reach { $count } resident
+   *[other] Your pings reach { $count } residents
+    }
+sharing-summary-accept = { $count ->
+    [one] You accept from { $count } ally
+   *[other] You accept from { $count } allies
+    }
 sharing-group-loading = Loading the group’s members…
 sharing-pings-only-me = Pings stay on your screen.
-sharing-pings-nobody = Nobody would receive your pings: add teammates.
+sharing-pings-nobody = Nobody would receive your pings: add allies.
 sharing-no-group = No active group. Choose one in your groups.
 sharing-away = Not nearby
 sharing-search = Search residents
@@ -15060,8 +15069,11 @@ sharing-group-members = { $count } members · { $nearby } nearby
 sharing-send-title = Send marker sets
 sharing-send-set = Active set: { $name } · { $count } markers · { $selected } selected
 sharing-send-off = Sending is off.
-sharing-send-nobody = Nobody would receive it: add teammates or include your group.
-sharing-send-reach = Goes to { $count } resident(s).
+sharing-send-nobody = Nobody would receive it: add allies or include your group.
+sharing-send-reach = { $count ->
+    [one] Goes to { $count } resident.
+   *[other] Goes to { $count } residents.
+    }
 sharing-progress = Sending… { $done } / { $total }
 sharing-inbox = Received sets
 sharing-inbox-empty = Nothing received yet.
@@ -15210,7 +15222,7 @@ tactical-send-enabled = Allow sending
 tactical-receive-enabled = Allow receiving
 tactical-ping-sharing = Who sees your pings
 tactical-local = Only me
-tactical-selected = Teammates
+tactical-selected = Allies
 tactical-active-group = Active group
 tactical-send-set = Send the whole set
 tactical-import-copy = Save as a copy

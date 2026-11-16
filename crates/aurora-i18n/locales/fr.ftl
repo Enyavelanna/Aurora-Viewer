@@ -15,7 +15,7 @@ ping-ready = Prêt
 ping-release = Relâchez
 ping-choose = Choisissez
 ping-wheel-help = Relâchez pour placer · centre, Échap ou clic droit pour annuler
-ping-gesture-help = Appuyez pour placer un ping ; visez un résident pour un Contact. Appuyez deux fois pour transformer votre dernier ping en Contact. Maintenez pour la roue des pings. Visez le ping d’un équipier et appuyez pour répondre ; visez le vôtre pour l’annuler.
+ping-gesture-help = Appuyez pour placer un ping ; visez un résident pour un Contact. Appuyez deux fois pour transformer votre dernier ping en Contact. Maintenez pour la roue des pings. Visez le ping d’un allié et appuyez pour répondre ; visez le vôtre pour l’annuler.
 ping-active = Pings actifs et réponses
 ping-auto-contact = Choisir Contact en visant un résident
 ping-double-tap = Deux appuis transforment un ping en Contact
@@ -15013,7 +15013,10 @@ combat-global = Tous
 combat-personal = Les miens
 combat-status = Reçus : { $received } · Journalisés : { $recorded } · Enregistrés : { $saved } · Manqués : { $lost }
 combat-journal-error = Le journal de combat n’a pas pu être enregistré. Les événements de cette session restent disponibles.
-combat-loss = Combat : { $count } événement(s) manqué(s). Les séries de kills peuvent être inexactes.
+combat-loss = { $count ->
+    [one] Combat : { $count } événement manqué. Les séries de kills peuvent être inexactes.
+   *[other] Combat : { $count } événements manqués. Les séries de kills peuvent être inexactes.
+    }
 combat-rewards = Annonces et médailles des récompenses
 combat-voices = Sons d’annonce des récompenses
 combat-medals = Bannière de médaille
@@ -15050,16 +15053,22 @@ sharing-needs-tools = Les outils de combat de la mini-carte sont désactivés : 
 sharing-sending = Envoi
 sharing-sending-help = Envoyer vos pings et ensembles de marqueurs.
 sharing-receiving = Réception
-sharing-receiving-help = Accepter les pings et ensembles de marqueurs de vos coéquipiers et de votre groupe.
+sharing-receiving-help = Accepter les pings et ensembles de marqueurs de vos alliés et de votre groupe.
 sharing-summary-off = Le partage est désactivé : vos pings et ensembles de marqueurs restent sur votre écran.
 sharing-summary-not-sending = Envoi désactivé
 sharing-summary-not-receiving = Réception désactivée
 sharing-summary-pings-none = Vos pings restent sur votre écran
-sharing-summary-pings = Vos pings atteignent { $count } résident(s)
-sharing-summary-accept = Vous acceptez { $count } allié(s)
+sharing-summary-pings = { $count ->
+    [one] Vos pings atteignent { $count } résident
+   *[other] Vos pings atteignent { $count } résidents
+    }
+sharing-summary-accept = { $count ->
+    [one] Vous acceptez { $count } allié
+   *[other] Vous acceptez { $count } alliés
+    }
 sharing-group-loading = Chargement des membres du groupe…
 sharing-pings-only-me = Les pings restent sur votre écran.
-sharing-pings-nobody = Personne ne recevrait vos pings : ajoutez des coéquipiers.
+sharing-pings-nobody = Personne ne recevrait vos pings : ajoutez des alliés.
 sharing-no-group = Aucun groupe actif. Choisissez-en un dans vos groupes.
 sharing-away = Pas à proximité
 sharing-search = Chercher un résident
@@ -15069,8 +15078,11 @@ sharing-group-members = { $count } membres · { $nearby } à proximité
 sharing-send-title = Envoyer des ensembles de marqueurs
 sharing-send-set = Ensemble actif : { $name } · { $count } marqueurs · { $selected } sélectionnés
 sharing-send-off = L’envoi est désactivé.
-sharing-send-nobody = Personne ne le recevrait : ajoutez des coéquipiers ou incluez votre groupe.
-sharing-send-reach = Envoyé à { $count } résident(s).
+sharing-send-nobody = Personne ne le recevrait : ajoutez des alliés ou incluez votre groupe.
+sharing-send-reach = { $count ->
+    [one] Envoyé à { $count } résident.
+   *[other] Envoyé à { $count } résidents.
+    }
 sharing-progress = Envoi… { $done } / { $total }
 sharing-inbox = Ensembles reçus
 sharing-inbox-empty = Rien reçu pour l’instant.
@@ -15219,7 +15231,7 @@ tactical-send-enabled = Autoriser l’envoi
 tactical-receive-enabled = Autoriser la réception
 tactical-ping-sharing = Qui voit vos pings
 tactical-local = Moi seul
-tactical-selected = Coéquipiers
+tactical-selected = Alliés
 tactical-active-group = Groupe actif
 tactical-send-set = Envoyer tout l’ensemble
 tactical-import-copy = Enregistrer comme copie
