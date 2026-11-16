@@ -742,6 +742,71 @@ fn every_page_names_its_tabs() {
     );
 }
 
+#[test]
+fn combat_preferences_are_hidden_and_reset_without_erasing_annotations() {
+    let paths = collected();
+    for path in [
+        "combat.journal",
+        "combat.killmarker",
+        "combat.voices",
+        "combat.kill_sound",
+        "combat.feed",
+        "maps.tactical.enabled",
+        "maps.tactical.recipients",
+    ] {
+        assert!(
+            !paths.iter().any(|(_, name)| name == path),
+            "{path}: Combat settings live in the Combat window, not in Preferences"
+        );
+    }
+    assert!(Page::ALL.iter().all(|page| page.key() != "combat"), "no Combat page in Preferences");
+    assert_eq!(Page::Fun.section(), Some(aurora_i18n::tr!("ui-options-section-extras")));
+    let mut s = Settings::default();
+    s.combat.journal = true;
+    s.combat.voices = true;
+    s.maps.tactical.enabled = true;
+    s.maps.tactical.pings_enabled = true;
+    s.maps.tactical.add_marker([100.0, 200.0, 30.0]);
+    s.maps.tactical.ping([101.0, 201.0, 30.0], 1);
+    let markers = s.maps.tactical.markers.clone();
+    let pings = s.maps.tactical.session.pings.clone();
+    let combat = s.combat.clone();
+    for page in Page::ALL {
+        reset_page_settings(page, &mut s);
+    }
+    assert_eq!(s.combat, combat, "Combat settings are not reset by any Preferences page");
+    assert!(s.maps.tactical.enabled && s.maps.tactical.pings_enabled);
+    assert_eq!(s.maps.tactical.markers, markers);
+    assert_eq!(s.maps.tactical.session.pings, pings);
+}
+
+#[test]
+fn combat_pages_keep_the_controls_visible_and_every_tab_draws() {
+    let p = crate::theme::Theme::default().palette();
+    let mut frames = Frames::new();
+    let (mut s, mut st, mut r) = (Settings::default(), OptionsUi::default(), OptionsResult::default());
+    s.maps.tactical.pings_enabled = true;
+    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 900.0));
+    for tab in 0..=6 {
+        let mut texts = Vec::new();
+        for _ in 0..5 {
+            texts = frames.run(Vec::new(), |ui| {
+                ui.set_width(700.0);
+                crate::ui::combat_pages::show(ui, &p, &mut s, &mut st, &mut r, tab);
+            });
+        }
+        assert!(!texts.is_empty(), "tab {tab} draws something");
+        if tab == 5 {
+            let pings = texts
+                .iter()
+                .find(|t| t.source == aurora_i18n::tr!("tactical-pings"))
+                .expect("ping toggle")
+                .rect;
+            assert!(viewport.contains_rect(pings), "controls must appear in the visible pane: {pings:?}");
+        }
+    }
+}
+
 /// One frame of the rows of a page's tab, `width` wide, laid out as in the
 /// window; the window's state and result are kept between frames.
 fn page_frame(

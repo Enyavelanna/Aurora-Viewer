@@ -885,6 +885,7 @@ pub struct Settings {
     pub balance_shows_spent: bool,
     /// Mini-map and world map options (Firestorm MiniMap* / Map* settings).
     pub maps: MapSettings,
+    pub(crate) combat: crate::combat::Settings,
     /// "Search": last tab, rating boxes and land limits.
     pub search: crate::world::search::SearchSettings,
     /// Other panels open at exit (restored at startup) and the People tab.
@@ -2379,6 +2380,7 @@ impl Default for Settings {
             balance_shows_received: true,
             balance_shows_spent: true,
             maps: MapSettings::default(),
+            combat: Default::default(),
             search: Default::default(),
             show_people: true,
             people_tab: 0,
@@ -2949,12 +2951,46 @@ impl Settings {
         let new_profile = file.is_none();
         let mut s = file
             .and_then(|b| {
-                let Ok(value) = serde_json::from_slice::<serde_json::Value>(&b) else {
+                let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&b) else {
                     // rewritten with the defaults at the next save: keep it
                     log::warn!("settings.json is not readable JSON, defaults used");
                     crate::tolerant::backup(path);
                     return None;
                 };
+                if let Some(tactical) = value
+                    .get_mut("maps")
+                    .and_then(|m| m.get_mut("tactical"))
+                    .and_then(|t| t.as_object_mut())
+                    && !tactical.contains_key("library")
+                {
+                    let backup = path.with_extension("pre-combat-workspace.json");
+                    if !backup.exists()
+                        && let Err(error) = std::fs::copy(path, &backup)
+                    {
+                        log::warn!("combat workspace settings backup failed: {error}");
+                    }
+                    if !tactical.contains_key("ping_audience") {
+                        let audience = if tactical.get("share").and_then(|v| v.as_bool()) != Some(true) {
+                            0
+                        } else if tactical.get("share_group").and_then(|v| v.as_bool()) == Some(true) {
+                            2
+                        } else {
+                            1
+                        };
+                        tactical.insert("ping_audience".into(), serde_json::json!(audience));
+                    }
+                }
+                if value
+                    .get("combat")
+                    .is_some_and(|v| v.get("hitmarker").is_some() || v.get("hit_sound").is_some())
+                {
+                    let backup = path.with_extension("pre-combat.json");
+                    if !backup.exists()
+                        && let Err(error) = std::fs::copy(path, &backup)
+                    {
+                        log::warn!("combat settings backup failed: {error}");
+                    }
+                }
                 saved_window = saved_window_state(&value);
                 // Select before serde fills missing fields: default auto-replies
                 // must use the saved locale too, without replacing custom text.
@@ -3582,6 +3618,9 @@ impl Settings {
         } else {
             10.0
         };
+        self.combat.migrate_rewards();
+        self.maps.tactical.migrate_audience();
+        self.maps.tactical.allies.sanitize();
         self
     }
 
@@ -3859,6 +3898,7 @@ pub enum MiniAvatarNameFormat {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct MapSettings {
+    pub(crate) tactical: crate::combat::tactical::Settings,
     /// MiniMapScale: pixels per region, 32..4096.
     pub mini_scale: f32,
     /// Avatar name format in minimap tooltips and avatar menus.
@@ -3909,6 +3949,7 @@ pub struct MapSettings {
 impl Default for MapSettings {
     fn default() -> Self {
         MapSettings {
+            tactical: Default::default(),
             mini_scale: 128.0,
             mini_avatar_name_format: MiniAvatarNameFormat::DisplayAndLegacy,
             // forced to north-up at the first login (llnetmap.cpp)

@@ -716,6 +716,11 @@ impl Camera {
         (base / (1.0 + self.current_fov_zoom)).max(mouselook_zoom::min_view(aspect).min(base))
     }
 
+    /// The factor for a mouselook turn at the angle shown now (`look_scale`).
+    pub fn zoom_look_scale(&self, s: &CameraSettings, strength: f32) -> f32 {
+        mouselook_zoom::look_scale(self.fov_y, s.fov, strength)
+    }
+
     pub fn reset_gamepad_mouselook_zoom(&mut self) {
         self.gamepad_ml_zoom.reset();
     }
@@ -6775,6 +6780,41 @@ mod tests {
         assert_eq!(cam.fov_y, normal);
         // without the button the wheel is the usual one
         assert!(!cam.scroll_mouselook_zoom(1.0, aspect));
+    }
+
+    #[test]
+    fn a_zoomed_mouselook_turn_slows_by_the_combat_setting_and_only_while_zoomed() {
+        let normal = 60f32.to_radians();
+        let mut s = CameraSettings {
+            fov: normal,
+            ..Default::default()
+        };
+        let mut w = world_at(Vec3::new(128.0, 128.0, 25.0));
+        let mut cam = Camera::default();
+        settle(&mut cam, &mut w, &s);
+        let aspect = 16.0 / 9.0;
+        cam.change_to_mouselook(&mut w.agent, &s, false);
+        cam.update(&mut w, &s, &frame(1.0 / 60.0));
+        // not zoomed: the turn is the plain one, whatever the setting
+        assert_eq!(cam.zoom_look_scale(&s, 1.0), 1.0);
+        // the right button held and the wheel turned: a narrower view
+        cam.press_mouselook_zoom(&s, aspect);
+        assert!(cam.scroll_mouselook_zoom(-3.0, aspect));
+        cam.update(&mut w, &s, &frame(1.0 / 60.0));
+        assert!(cam.fov_y < normal);
+        let full = cam.zoom_look_scale(&s, 1.0);
+        let half = cam.zoom_look_scale(&s, 0.5);
+        let ratio = (cam.fov_y * 0.5).tan() / (normal * 0.5).tan();
+        assert!((full - ratio).abs() < 1e-5 && full < 0.8, "the turn slows with the view: {full}");
+        assert!(full < half && half < 1.0, "and by as much as the setting asks: {half}");
+        assert_eq!(cam.zoom_look_scale(&s, 0.0), 1.0, "0 keeps the plain turn");
+        // the angle is remembered: the next hold zooms, and slows, at once
+        assert!(cam.release_mouselook_zoom(&mut s));
+        cam.update(&mut w, &s, &frame(1.0 / 60.0));
+        assert_eq!(cam.zoom_look_scale(&s, 1.0), 1.0);
+        cam.press_mouselook_zoom(&s, aspect);
+        cam.update(&mut w, &s, &frame(1.0 / 60.0));
+        assert!((cam.zoom_look_scale(&s, 1.0) - full).abs() < 1e-5);
     }
 
     #[test]

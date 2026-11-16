@@ -116,6 +116,8 @@ pub enum MiniMapAction {
     OpenWorldMap,
     /// "View profile" (LLNetMap::handleShowProfile).
     Profile(Uuid),
+    /// Open the region marker editor (a double click on a marker, or the menu).
+    OpenMarkerEditor,
     /// "About Land" on the parcel under the click (popupShowAboutLand).
     AboutLand(f64, f64),
     /// Chat ring options changed (saved with the color settings).
@@ -149,8 +151,11 @@ struct LocalTerrain {
 pub struct MiniMap {
     /// Pan in screen points (y down).
     pan: Vec2,
+    fixed_origin: Option<(f64, f64)>,
     recenter: bool,
     objects: Option<Raster>,
+    editor_objects: Option<Raster>,
+    editor_parcels: Option<Raster>,
     parcels: Option<Raster>,
     terrain: HashMap<RegionHandle, LocalTerrain>,
     /// Right click: global position and avatars under the pointer.
@@ -166,6 +171,15 @@ pub struct View {
     pub ppm: f32,
     cos: f32,
     sin: f32,
+}
+
+impl crate::ui::combat_annotate::Project for View {
+    fn at(&self, x: f64, y: f64) -> Pos2 {
+        self.to_screen(x, y)
+    }
+    fn ppm(&self) -> f32 {
+        self.ppm
+    }
 }
 
 impl View {
@@ -772,10 +786,15 @@ impl MiniMap {
         let mut actions = Vec::new();
         // FIRE-32339: a plain drag moves the floater, Shift + drag pans the
         // map; a locked floater does not move, so any drag pans it
-        let pan_drag = ui.input(|i| i.modifiers.shift) || opts.mini_locked;
+        if !opts.tactical.enabled || !opts.tactical.available() {
+            opts.tactical.stop_editing();
+        }
+        let drawing = interactive && opts.tactical.session.draw.is_some();
+        let editing = interactive && opts.tactical.session.editing && !drawing && !ui.input(|i| i.modifiers.shift);
+        let pan_drag = !drawing && !editing && (ui.input(|i| i.modifiers.shift) || opts.mini_locked);
         let sense = if !interactive {
             Sense::hover()
-        } else if pan_drag || self.dragging {
+        } else if editing || drawing || pan_drag || self.dragging {
             Sense::click_and_drag()
         } else {
             Sense::click()
@@ -796,7 +815,7 @@ impl MiniMap {
                 // keep the pan on the same spot; zoom around the pointer
                 // when the map does not re-center itself
                 self.pan *= opts.mini_scale / old;
-                if !opts.mini_auto_center
+                if (!opts.mini_auto_center || (opts.tactical.available() && opts.tactical.fixed_center))
                     && let Some(m) = resp.hover_pos()
                 {
                     let off = m - rect.center();
@@ -804,14 +823,14 @@ impl MiniMap {
                 }
             }
         }
-        self.dragging = interactive && resp.dragged();
+        self.dragging = interactive && !drawing && !editing && resp.dragged();
         if interactive && resp.hovered() && pan_drag {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         if self.dragging {
             self.pan += resp.drag_delta();
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        } else if opts.mini_auto_center || self.recenter {
+        } else if !(opts.tactical.available() && opts.tactical.fixed_center) && (opts.mini_auto_center || self.recenter) {
             // LLNetMap::draw: pan = lerp(pan, 0, 1 - 2^(-dt / 0.1))
             let k = 1.0 - (-dt / 0.1f32).exp2();
             self.pan *= 1.0 - k;
@@ -823,15 +842,32 @@ impl MiniMap {
 
         let scale = opts.mini_scale;
         let ppm = scale / 256.0;
-        // MiniMapRotate: atan2(at.x, at.y) turns the camera direction up
-        let rot = if opts.mini_rotate { cam.dir.x.atan2(cam.dir.y) } else { 0.0 };
-        let view = View {
-            center: rect.center() + self.pan,
-            cam: to_global(world, cam.pos),
-            ppm,
-            cos: rot.cos(),
-            sin: rot.sin(),
+        let rot = if opts.tactical.available() {
+            if opts.tactical.rotate_avatar {
+                FRAC_PI_2 - world.agent.yaw
+            } else {
+                0.0
+            }
+        } else if opts.mini_rotate {
+            cam.dir.x.atan2(cam.dir.y)
+        } else {
+            0.0
         };
+        let camera = to_global(world, cam.pos);
+        if opts.tactical.available() && opts.tactical.fixed_center {
+            if self.recenter {
+                self.fixed_origin = Some(to_global(world, world.agent.position));
+                self.pan = Vec2::ZERO;
+                self.recenter = false;
+            }
+            let origin = *self.fixed_origin.get_or_insert(camera);
+            let frame = View::new(rect.center(), origin, ppm, rot);
+            self.fixed_origin = Some(frame.to_global(rect.center() - self.pan));
+            self.pan = Vec2::ZERO;
+        } else {
+            self.fixed_origin = None;
+        }
+        let view = View::new(rect.center() + self.pan, self.fixed_origin.unwrap_or(camera), ppm, rot);
 
         // --- region tiles (the floater's background shows elsewhere) ---
         let main = world.main_region;
@@ -937,11 +973,34 @@ impl MiniMap {
         }
 
         // --- avatars ---
-        let dot_r = (DOT_SCALE * ppm).max(MIN_DOT_RADIUS);
+        let dot_r = (DOT_SCALE * ppm).max(MIN_DOT_RADIUS)
+            * if opts.tactical.available() && opts.tactical.dots_enabled {
+                opts.tactical.dot_scale.clamp(0.5, 3.0)
+            } else {
+                1.0
+            };
         let pointer = resp.hover_pos();
         let k = super::colors::get();
         let mut closest: Option<(f32, Uuid, Vec3, bool)> = None;
         let mut under: Vec<Uuid> = Vec::new();
+        // Allies (Combat > Allies): their own colour, under a colour picked for one resident.
+        let allies = &opts.tactical.allies;
+        let ally_ids = if opts.tactical.available() && allies.minimap {
+            allies.resolve(world, &opts.tactical.recipients)
+        } else {
+            Default::default()
+        };
+        // The group titles worn around, for the colours given to a group.
+        let titles: std::collections::HashMap<Uuid, String> =
+            if opts.tactical.available() && opts.tactical.dots_enabled && !opts.tactical.title_colors.is_empty() {
+                world
+                    .objects
+                    .avatars()
+                    .filter_map(|(_, o)| o.group_title().map(|t| (o.full_id, t)))
+                    .collect()
+            } else {
+                Default::default()
+            };
         for (id, pos, known) in avatars(world) {
             let g = to_global(world, pos);
             let sp = view.to_screen(g.0, g.1);
@@ -963,7 +1022,48 @@ impl MiniMap {
             } else {
                 None
             };
+            let col = opts
+                .tactical
+                .group_colors
+                .iter()
+                .filter(|_| opts.tactical.available() && opts.tactical.dots_enabled)
+                .find_map(|(group, color)| {
+                    world
+                        .group_data
+                        .get(group)
+                        .filter(|g| g.members.contains_key(&id))
+                        .map(|_| crate::combat::tactical::color(*color))
+                })
+                .unwrap_or(col);
+            let col = titles
+                .get(&id)
+                .and_then(|title| opts.tactical.title_color(title))
+                .map(crate::combat::tactical::color)
+                .unwrap_or(col);
+            let is_ally = ally_ids.contains(&id);
+            let col = if is_ally {
+                crate::combat::tactical::color(allies.color)
+            } else {
+                col
+            };
+            let col = opts
+                .tactical
+                .player_colors
+                .get(&id)
+                .filter(|_| opts.tactical.available() && opts.tactical.dots_enabled)
+                .map(|c| crate::combat::tactical::color(*c))
+                .unwrap_or(col);
+            if opts.tactical.available() && opts.tactical.dots_enabled && opts.tactical.outline_width > 0.0 {
+                painter.circle_filled(
+                    sp,
+                    dot_r + opts.tactical.outline_width.clamp(0.0, 4.0),
+                    crate::combat::tactical::color(opts.tactical.outline),
+                );
+            }
             draw_avatar(&painter, sp, dot_r, col, dz);
+            if is_ally && allies.ring {
+                painter.circle_stroke(sp, dot_r + 3.0, Stroke::new(1.5, col));
+            }
             if let Some(m) = pointer {
                 let d = sp.distance(m);
                 if d < dot_r * PICK_SCALE {
@@ -978,6 +1078,8 @@ impl MiniMap {
         }
 
         // --- tracking ---
+        opts.tactical.prune();
+        opts.tactical.map(&painter, &view, world);
         if let Some(t) = &world.map.track {
             let sp = view.to_screen(t.x, t.y);
             draw_tracking(&painter, rect, sp, TRACK_COLOR, t.z - cam.pos.z, None);
@@ -1012,9 +1114,9 @@ impl MiniMap {
         // --- camera cone: points up when rotating, else along the camera ---
         let hfov = cam.hfov.clamp(0.1, PI * 0.95);
         let radius = cam.far * ppm;
-        let heading = if opts.mini_rotate { FRAC_PI_2 } else { cam.dir.y.atan2(cam.dir.x) };
+        let heading = cam.dir.y.atan2(cam.dir.x) + rot;
         let steps = ((hfov * 40.0 / TAU).round() as usize).max(1);
-        let apex = view.center;
+        let apex = view.to_screen(camera.0, camera.1);
         let mut pts = vec![apex];
         for i in 0..=steps {
             let a = heading - hfov * 0.5 + hfov * i as f32 / steps as f32;
@@ -1028,6 +1130,234 @@ impl MiniMap {
         draw_directions(&painter, rect, rot);
 
         if !interactive {
+            return actions;
+        }
+
+        // Drawing claims its primary clicks and drags before teleport/window gestures.
+        if drawing {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            text_shadow(
+                &painter,
+                rect.left_top() + vec2(8.0, 8.0),
+                egui::Align2::LEFT_TOP,
+                aurora_i18n::tr!("tactical-draw-help"),
+                12.0,
+                p.ink,
+            );
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                opts.tactical.session.draw = None;
+                opts.tactical.session.drawing_start = None;
+            } else if let Some(pointer) = resp.hover_pos() {
+                let (x, y) = view.to_global(pointer);
+                let point = [x, y, world.agent.position.z as f64];
+                if let (Some(start), Some(shape)) = (opts.tactical.session.drawing_start, opts.tactical.session.draw)
+                    && let Some(preview) = crate::combat::tactical::Marker::drawn(shape, start, point, opts.tactical.colors[2])
+                {
+                    opts.tactical.paint_map(&painter, &view, &preview);
+                }
+                if resp.clicked_by(egui::PointerButton::Primary) {
+                    if let Some(start) = opts.tactical.session.drawing_start {
+                        if let Some(shape) = opts.tactical.session.draw
+                            && let Some(marker) = crate::combat::tactical::Marker::drawn(shape, start, point, opts.tactical.colors[2])
+                            && opts.tactical.markers.len() < 256
+                        {
+                            opts.tactical.sync_history();
+                            let before = opts.tactical.snapshot();
+                            opts.tactical.markers.push(marker);
+                            opts.tactical.push_undo(before);
+                            opts.tactical.session.draw = None;
+                            opts.tactical.session.drawing_start = None;
+                        }
+                    } else {
+                        opts.tactical.session.drawing_start = Some(point);
+                    }
+                }
+            }
+            return actions;
+        }
+
+        if editing {
+            let cfg = &mut opts.tactical;
+            cfg.sync_history();
+            let (shift, command) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                cfg.cancel_gesture();
+                cfg.session.editing = false;
+                return actions;
+            }
+            let can_edit = |cfg: &crate::combat::tactical::Settings, m: &crate::combat::tactical::Marker| cfg.shown(m) && !cfg.frozen(m);
+            if resp.hovered() && cfg.session.edit_drag.is_none() {
+                let pressed = |key| ui.input(|i| i.key_pressed(key));
+                if command && pressed(egui::Key::Z) && !shift {
+                    cfg.undo();
+                } else if command && (pressed(egui::Key::Y) || (shift && pressed(egui::Key::Z))) {
+                    cfg.redo();
+                } else if pressed(egui::Key::Delete) && cfg.markers.iter().any(|m| m.selected && can_edit(cfg, m)) {
+                    let before = cfg.snapshot();
+                    let keep: Vec<_> = cfg.markers.iter().filter(|m| !(m.selected && can_edit(cfg, m))).cloned().collect();
+                    cfg.markers = keep;
+                    cfg.push_undo(before);
+                }
+            }
+            let press = (resp.drag_started_by(egui::PointerButton::Primary)
+                || resp.clicked_by(egui::PointerButton::Primary)
+                || resp.secondary_clicked())
+            .then(|| ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos()))
+            .flatten();
+            if let Some(at) = press {
+                let primary = !resp.secondary_clicked();
+                // a handle of the only selected marker, else a marker, else a miss
+                let single = cfg.markers.iter().filter(|m| m.selected).count() == 1;
+                let handle = cfg.markers.iter().find(|m| m.selected && single && can_edit(cfg, m)).and_then(|m| {
+                    crate::ui::combat_annotate::handle_at(&view, m, at)
+                        .filter(|h| !matches!(h, crate::ui::combat_annotate::Handle::Edge(_)))
+                        .map(|h| (h, m.clone()))
+                });
+                if let Some((handle, original)) = handle.filter(|_| primary) {
+                    cfg.session.edit_drag = Some(crate::combat::tactical::EditGesture::Handle {
+                        handle,
+                        original,
+                        before: cfg.snapshot(),
+                    });
+                } else {
+                    let hit = crate::ui::combat_annotate::pick(&view, cfg.markers.iter().filter(|m| can_edit(cfg, m)), at);
+                    match hit {
+                        Some(id) => {
+                            let was = cfg.markers.iter().any(|m| m.id == id && m.selected);
+                            if shift && primary {
+                                if let Some(m) = cfg.markers.iter_mut().find(|m| m.id == id) {
+                                    m.selected = !was;
+                                }
+                            } else if !was {
+                                for m in &mut cfg.markers {
+                                    m.selected = m.id == id;
+                                }
+                            }
+                            let (x, y) = view.to_global(at);
+                            let originals: Vec<_> = cfg.markers.iter().filter(|m| m.selected && can_edit(cfg, m)).cloned().collect();
+                            if primary && !originals.is_empty() {
+                                cfg.session.edit_drag = Some(crate::combat::tactical::EditGesture::Move {
+                                    start: [x, y],
+                                    originals,
+                                    before: cfg.snapshot(),
+                                });
+                            }
+                        }
+                        None if primary && !shift => {
+                            for m in &mut cfg.markers {
+                                m.selected = false;
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                if resp.double_clicked_by(egui::PointerButton::Primary)
+                    && crate::ui::combat_annotate::pick(&view, cfg.markers.iter().filter(|m| can_edit(cfg, m)), at).is_some()
+                {
+                    cfg.session.edit_drag = None;
+                    actions.push(MiniMapAction::OpenMarkerEditor);
+                }
+            }
+            if resp.dragged_by(egui::PointerButton::Primary)
+                && let Some(pointer) = resp.interact_pointer_pos()
+            {
+                let (x, y) = view.to_global(pointer);
+                match cfg.session.edit_drag.clone() {
+                    Some(crate::combat::tactical::EditGesture::Move { start, originals, .. }) => {
+                        for original in &originals {
+                            if let Some(m) = cfg.markers.iter_mut().find(|m| m.id == original.id) {
+                                *m = original.clone();
+                                crate::ui::combat_annotate::translate(m, x - start[0], y - start[1]);
+                            }
+                        }
+                    }
+                    Some(crate::combat::tactical::EditGesture::Handle { handle, original, .. }) => {
+                        if let Some(m) = cfg.markers.iter_mut().find(|m| m.id == original.id) {
+                            crate::ui::combat_annotate::drag_handle(m, &original, handle, [x, y], shift, shift);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            if resp.drag_stopped_by(egui::PointerButton::Primary)
+                || (cfg.session.edit_drag.is_some() && resp.clicked_by(egui::PointerButton::Primary))
+            {
+                if let Some(gesture) = cfg.session.edit_drag.take() {
+                    let before = gesture.before().clone();
+                    if before.markers != cfg.markers {
+                        cfg.push_undo(before);
+                    }
+                }
+                cfg.save_set();
+            }
+            // the selection: a frame around each, handles on the only one
+            for marker in cfg.markers.iter().filter(|m| m.selected) {
+                if let Some((lo, hi)) = crate::ui::combat_annotate::bounds(marker) {
+                    let r = Rect::from_two_pos(view.to_screen(lo[0], lo[1]), view.to_screen(hi[0], hi[1])).expand(8.0);
+                    painter.rect_stroke(r, 0.0, Stroke::new(1.0, p.violet_light), egui::StrokeKind::Outside);
+                }
+            }
+            if let [marker] = cfg.markers.iter().filter(|m| m.selected).collect::<Vec<_>>().as_slice() {
+                for (handle, at) in crate::ui::combat_annotate::handles(&view, marker) {
+                    if matches!(handle, crate::ui::combat_annotate::Handle::Edge(_)) {
+                        continue;
+                    }
+                    let r = Rect::from_center_size(at, vec2(8.0, 8.0));
+                    painter.rect_filled(r, 0.0, p.ink);
+                    painter.rect_stroke(r, 0.0, Stroke::new(1.5, p.violet), egui::StrokeKind::Outside);
+                }
+            }
+            let z = world.agent.position.z as f64;
+            let (hx, hy) = resp.hover_pos().map_or((0.0, 0.0), |at| view.to_global(at));
+            menu::context_menu(&resp, p, |ui| {
+                let mut open_editor = false;
+                let mut duplicate = false;
+                let mut delete = false;
+                if let Some(marker) = cfg.markers.iter_mut().find(|m| m.selected) {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut marker.name)
+                            .char_limit(128)
+                            .hint_text(aurora_i18n::tr!("combat-editor-name-hint")),
+                    );
+                    crate::ui::widgets::color_button(ui, p, "marker-edit-color", &mut marker.color, true);
+                    duplicate = menu::item(ui, p, "copy-filled", aurora_i18n::tr!("combat-editor-duplicate"));
+                    delete = menu::item(ui, p, "trash-filled", aurora_i18n::tr!("tactical-remove"));
+                } else {
+                    if menu::item(ui, p, "map-pin-filled", aurora_i18n::tr!("combat-minimap-add-pin")) {
+                        cfg.place_marker(crate::combat::tactical::Shape::Pin, [hx, hy, z]);
+                    }
+                    if menu::item(ui, p, "circle-filled", aurora_i18n::tr!("combat-minimap-add-point")) {
+                        cfg.place_marker(crate::combat::tactical::Shape::Point, [hx, hy, z]);
+                    }
+                }
+                open_editor |= menu::item(ui, p, "pencil-filled", aurora_i18n::tr!("combat-editor-open"));
+                menu::toggle(ui, p, "edit", aurora_i18n::tr!("tactical-edit"), &mut cfg.session.editing);
+                if duplicate {
+                    let before = cfg.snapshot();
+                    let copies: Vec<_> = cfg.markers.iter().filter(|m| m.selected).cloned().collect();
+                    for m in &mut cfg.markers {
+                        m.selected = false;
+                    }
+                    for mut m in copies {
+                        if cfg.markers.len() >= 256 {
+                            break;
+                        }
+                        m.id = Uuid::new_v4();
+                        m.selected = true;
+                        crate::ui::combat_annotate::translate(&mut m, 4.0, -4.0);
+                        cfg.markers.push(m);
+                    }
+                    cfg.push_undo(before);
+                }
+                if delete {
+                    let before = cfg.snapshot();
+                    cfg.markers.retain(|m| !m.selected);
+                    cfg.push_undo(before);
+                }
+                if open_editor {
+                    actions.push(MiniMapAction::OpenMarkerEditor);
+                }
+            });
             return actions;
         }
 
@@ -1108,6 +1438,66 @@ impl MiniMap {
             // LLNetMap::handleRightMouseDown greys identity actions for everyone
             // under @shownames, including its exceptions.
             let can_show_names = !world.rlva.has("shownames") && avs.iter().all(|id| names_allowed(world, id));
+            // Combat: everything the feature adds, together and first
+            if opts.tactical.available() {
+                let at = [px, py, world.agent.position.z as f64];
+                if opts.tactical.enabled {
+                    if menu::item(ui, p, "map-pin-filled", aurora_i18n::tr!("combat-minimap-add-pin")) {
+                        opts.tactical.place_marker(crate::combat::tactical::Shape::Pin, at);
+                    }
+                    if menu::item(ui, p, "circle-filled", aurora_i18n::tr!("combat-minimap-add-point")) {
+                        opts.tactical.place_marker(crate::combat::tactical::Shape::Point, at);
+                    }
+                }
+                if opts.tactical.pings_enabled {
+                    menu::submenu(ui, p, "flag-filled", aurora_i18n::tr!("combat-menu-ping"), true, |ui| {
+                        for kind in 0..4 {
+                            let icon = opts.tactical.icons[kind].clone();
+                            if menu::item(ui, p, &icon, crate::combat::tactical::kind_name(kind)) {
+                                opts.tactical.ping(at, kind);
+                            }
+                        }
+                    });
+                }
+                if opts.tactical.enabled {
+                    menu::submenu(ui, p, "pencil-filled", aurora_i18n::tr!("combat-menu-draw"), true, |ui| {
+                        for shape in [crate::combat::tactical::Shape::Rectangle, crate::combat::tactical::Shape::Line] {
+                            if menu::item(ui, p, crate::ui::combat_editor::shape_icon(shape), shape.label()) {
+                                opts.tactical.session.draw = Some(shape);
+                                opts.tactical.session.drawing_start = None;
+                            }
+                        }
+                    });
+                    menu::toggle(
+                        ui,
+                        p,
+                        "pointer-filled",
+                        aurora_i18n::tr!("tactical-edit"),
+                        &mut opts.tactical.session.editing,
+                    );
+                    if menu::item(ui, p, "pencil-filled", aurora_i18n::tr!("combat-editor-open")) {
+                        actions.push(MiniMapAction::OpenMarkerEditor);
+                    }
+                }
+                let fixed = menu::toggle(
+                    ui,
+                    p,
+                    "focus-centered",
+                    aurora_i18n::tr!("tactical-fixed-center"),
+                    &mut opts.tactical.fixed_center,
+                );
+                let rotate = menu::toggle(
+                    ui,
+                    p,
+                    "compass-filled",
+                    aurora_i18n::tr!("tactical-rotate-avatar"),
+                    &mut opts.tactical.rotate_avatar,
+                );
+                if fixed || rotate {
+                    opts.tactical.mark_unsaved();
+                }
+                menu::separator(ui, p);
+            }
             if let Some(&first) = avs.first() {
                 if avs.len() == 1 {
                     if menu::item_if(ui, p, "user-filled", aurora_i18n::tr!("common-view-profile"), can_show_names) {
@@ -1244,18 +1634,26 @@ impl MiniMap {
                 p,
                 "compass-filled",
                 aurora_i18n::tr!("ui-minimap-north-up"),
-                !opts.mini_rotate,
+                if opts.tactical.available() {
+                    !opts.tactical.rotate_avatar
+                } else {
+                    !opts.mini_rotate
+                },
                 true,
             ) {
                 opts.mini_rotate = false;
+                if opts.tactical.available() && opts.tactical.rotate_avatar {
+                    opts.tactical.rotate_avatar = false;
+                    opts.tactical.mark_unsaved();
+                }
             }
             if menu::check(
                 ui,
                 p,
                 "camera-filled",
                 aurora_i18n::tr!("ui-minimap-camera-up"),
-                opts.mini_rotate,
-                true,
+                opts.mini_rotate && !opts.tactical.available(),
+                !opts.tactical.available(),
             ) {
                 opts.mini_rotate = true;
             }
@@ -1274,7 +1672,7 @@ impl MiniMap {
                 p,
                 "arrows-minimize",
                 aurora_i18n::tr!("ui-minimap-center-map"),
-                !opts.mini_auto_center && self.pan != Vec2::ZERO,
+                opts.tactical.fixed_center || (!opts.mini_auto_center && self.pan != Vec2::ZERO),
             ) {
                 self.recenter = true;
             }
@@ -1400,10 +1798,196 @@ impl MiniMap {
         self.terrain.get(&handle).map(|t| t.tex.clone())
     }
 
+    /// The region editor uses the exact tile, terrain and object/parcel raster
+    /// functions of the minimap, with separate raster caches for its wider view.
+    pub(crate) fn editor_images(
+        &mut self,
+        ctx: &egui::Context,
+        world: &World,
+        tiles: &mut MapTiles,
+        opts: &MapSettings,
+        view: crate::combat::tactical::MapView,
+    ) -> Vec<RegionImage> {
+        let _ = opts;
+        let Some(region) = world.main() else {
+            return Vec::new();
+        };
+        let (ox, oy) = aurora_net::handle_to_origin(region.handle);
+        let (width, height) = (region.heightmap.size_x as f64, region.heightmap.size_y as f64);
+        let now = Instant::now();
+        let mut images = Vec::new();
+        self.local_terrain(ctx, world, region, now);
+        if let Some(terrain) = self.terrain.get(&region.handle) {
+            images.push(RegionImage {
+                origin: (ox as f64, oy as f64),
+                size: (width, height),
+                texture: terrain.tex.clone(),
+                ground: true,
+            });
+        }
+        for y in 0..region.heightmap.size_y.div_ceil(256).min(16) {
+            for x in 0..region.heightmap.size_x.div_ceil(256).min(16) {
+                if let Ok(texture) = tiles.get(1, ox / 256 + x, oy / 256 + y, true) {
+                    images.push(RegionImage {
+                        origin: (ox as f64 + x as f64 * 256.0, oy as f64 + y as f64 * 256.0),
+                        size: (256.0, 256.0),
+                        texture,
+                        ground: true,
+                    });
+                }
+            }
+        }
+        let side = width.max(height) as f32;
+        let center = (ox as f64 + width / 2.0, oy as f64 + height / 2.0);
+        let tpm = 512.0 / side;
+        for (objects, enabled) in [(true, view.objects), (false, view.parcels)] {
+            let cache = if objects {
+                &mut self.editor_objects
+            } else {
+                &mut self.editor_parcels
+            };
+            if !enabled {
+                *cache = None;
+                continue;
+            }
+            if cache
+                .as_ref()
+                .is_none_or(|r| r.center != center || r.scale != side || now.duration_since(r.built) >= OBJECTS_REFRESH)
+            {
+                let pixels = if objects {
+                    rasterize_objects(world, center, 512, tpm, opts)
+                } else {
+                    rasterize_parcels(world, center, 512, tpm, opts.mini_for_sale, opts.mini_collision)
+                };
+                *cache = Some(store_raster(
+                    ctx,
+                    cache.take(),
+                    if objects {
+                        "combat-editor-objects"
+                    } else {
+                        "combat-editor-parcels"
+                    },
+                    pixels,
+                    center,
+                    tpm,
+                    512,
+                    side,
+                    0,
+                ));
+            }
+            if let Some(raster) = cache {
+                images.push(RegionImage {
+                    origin: (center.0 - side as f64 / 2.0, center.1 - side as f64 / 2.0),
+                    size: (side as f64, side as f64),
+                    texture: raster.tex.clone(),
+                    ground: false,
+                });
+            }
+        }
+        images
+    }
+
     /// Forget per-region data of regions that are gone.
     pub fn prune(&mut self, world: &World) {
         self.terrain.retain(|h, _| world.regions.contains_key(h));
     }
+}
+
+/// What the exported map is drawn from, copied out of the world on the main
+/// thread so that the picture itself can be made on a worker: the terrain,
+/// the objects already picked and coloured, the parcel overlays in reach.
+pub(crate) struct ExportInputs {
+    heightmap: crate::world::terrain::Heightmap,
+    water: f32,
+    /// South-west corner of the region, global metres, and its sides.
+    origin: (f64, f64),
+    size_m: (f32, f32),
+    view: crate::combat::tactical::MapView,
+    markers_only: bool,
+    objects: Option<Vec<ObjectDot>>,
+    parcels: Option<ParcelInputs>,
+    for_sale: bool,
+}
+
+/// Copies what `export_rasters` needs; None without a region.
+pub(crate) fn export_inputs(
+    world: &World,
+    view: crate::combat::tactical::MapView,
+    markers_only: bool,
+    opts: &MapSettings,
+) -> Option<ExportInputs> {
+    let region = world.main()?;
+    let (ox, oy) = aurora_net::handle_to_origin(region.handle);
+    let (w, h) = (region.heightmap.size_x as f32, region.heightmap.size_y as f32);
+    let center = (ox as f64 + f64::from(w) / 2.0, oy as f64 + f64::from(h) / 2.0);
+    let half_m = f64::from(w.max(h)) * 0.5;
+    Some(ExportInputs {
+        heightmap: region.heightmap.clone(),
+        water: region.info.as_ref().map(|i| i.water_height).unwrap_or(20.0),
+        origin: (ox as f64, oy as f64),
+        size_m: (w, h),
+        view,
+        markers_only,
+        objects: view.objects.then(|| object_dots(world, center, half_m, opts)),
+        parcels: view.parcels.then(|| parcel_inputs(world, center, half_m, opts.mini_collision)),
+        for_sale: opts.mini_for_sale,
+    })
+}
+
+/// The region as pictures `side` pixels wide for the exported map: the ground
+/// first (height shaded, or one plain colour, as bright as the view says; left
+/// out when the picture is of the markers alone), then the objects and the
+/// parcel lines when asked. Pure: it runs on the export's worker.
+pub(crate) fn export_rasters(inputs: &ExportInputs, side: usize) -> Vec<egui::ColorImage> {
+    use crate::combat::tactical::Ground;
+    let dim = inputs.view.dim.clamp(0.2, 1.0);
+    let (w, h) = inputs.size_m;
+    let side_m = w.max(h);
+    let water = inputs.water;
+    let heightmap = &inputs.heightmap;
+    let metres = |i: usize| i as f32 * side_m / side as f32;
+    let mut out = Vec::new();
+    if !inputs.markers_only {
+        out.push(match inputs.view.ground {
+            Ground::Shaded => {
+                let mut terrain = Vec::with_capacity(side * side);
+                for j in 0..side {
+                    for i in 0..side {
+                        // image row 0 is north
+                        let (x, y) = (metres(i), metres(side - 1 - j));
+                        let z = heightmap.sample(x, y);
+                        let base = terrain_color(z, water);
+                        // light from the north-west: slopes facing it brighten
+                        let slope = (heightmap.sample(x - 1.0, y) - heightmap.sample(x + 1.0, y) + heightmap.sample(x, y + 1.0)
+                            - heightmap.sample(x, y - 1.0))
+                            * 0.12;
+                        let shade = if z < water { 1.0 } else { (1.0 + slope).clamp(0.72, 1.28) };
+                        let lit = |c: u8| (f32::from(c) * shade * dim).clamp(0.0, 255.0) as u8;
+                        terrain.push(Color32::from_rgb(lit(base.r()), lit(base.g()), lit(base.b())));
+                    }
+                }
+                egui::ColorImage::new([side, side], terrain)
+            }
+            Ground::Flat => egui::ColorImage::filled([side, side], Color32::from_rgb(52, 58, 72)),
+        });
+    }
+    let center = (inputs.origin.0 + f64::from(w) / 2.0, inputs.origin.1 + f64::from(h) / 2.0);
+    let tpm = side as f32 / side_m;
+    if let Some(dots) = &inputs.objects {
+        out.push(draw_object_dots(dots, center, side, tpm));
+    }
+    if let Some(parcels) = &inputs.parcels {
+        out.push(draw_parcels(parcels, center, side, tpm, inputs.for_sale));
+    }
+    out
+}
+
+pub(crate) struct RegionImage {
+    pub origin: (f64, f64),
+    pub size: (f64, f64),
+    pub texture: egui::TextureHandle,
+    /// Terrain or a map tile (the ground), not objects or parcel lines.
+    pub ground: bool,
 }
 
 /// Ground under a global position, else our own height (teleport target).
@@ -1471,9 +2055,26 @@ fn draw_raster(painter: &egui::Painter, view: &View, r: &Raster) {
 /// LLViewerObjectList::renderObjectsForMap into a `size`² image centered on
 /// `center` (global), `tpm` texels per meter.
 fn rasterize_objects(world: &World, center: (f64, f64), size: usize, tpm: f32, opts: &MapSettings) -> egui::ColorImage {
-    let mut img = egui::ColorImage::filled([size, size], Color32::TRANSPARENT);
+    let half_m = size as f64 / tpm as f64 * 0.5;
+    draw_object_dots(&object_dots(world, center, half_m, opts), center, size, tpm)
+}
+
+/// One object on the map: where (global metres), how big (metres) and which
+/// colour, in the order they are drawn.
+pub(crate) struct ObjectDot {
+    gx: f64,
+    gy: f64,
+    r: f32,
+    color: Color32,
+}
+
+/// The objects the map shows within `half_m` of `center`, as
+/// renderObjectsForMap picks and colours them (own objects, big ones, the
+/// highlighted kinds), ready to draw without the world.
+fn object_dots(world: &World, center: (f64, f64), half_m: f64, opts: &MapSettings) -> Vec<ObjectDot> {
+    let mut dots = Vec::new();
     let Some((ox, oy)) = world.main_origin() else {
-        return img;
+        return dots;
     };
     let agent_z = world.agent.position.z;
     let water: HashMap<RegionHandle, f32> = world
@@ -1481,7 +2082,6 @@ fn rasterize_objects(world: &World, center: (f64, f64), size: usize, tpm: f32, o
         .iter()
         .map(|(h, r)| (*h, r.info.as_ref().map(|i| i.water_height).unwrap_or(20.0)))
         .collect();
-    let half_m = size as f64 / tpm as f64 * 0.5;
     for (_, o) in world.objects.iter() {
         if o.pcode != aurora_prim::params::LL_PCODE_VOLUME {
             continue;
@@ -1548,15 +2148,24 @@ fn rasterize_objects(world: &World, center: (f64, f64), size: usize, tpm: f32, o
         if f & FLAGS_PHANTOM != 0 {
             col = Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), PHANTOM_ALPHA);
         }
-        // renderPoint: a filled square of round(2 r tpm) texels
-        let d = ((2.0 * r * tpm).round() as i64).max(1);
-        let tx = ((gx - center.0) * tpm as f64 + size as f64 * 0.5) as i64;
-        let ty = (size as f64 * 0.5 - (gy - center.1) * tpm as f64) as i64;
+        dots.push(ObjectDot { gx, gy, r, color: col });
+    }
+    dots
+}
+
+/// `dots` into a `size`² image centered on `center` (global), `tpm` texels
+/// per meter: renderPoint, a filled square of round(2 r tpm) texels each.
+fn draw_object_dots(dots: &[ObjectDot], center: (f64, f64), size: usize, tpm: f32) -> egui::ColorImage {
+    let mut img = egui::ColorImage::filled([size, size], Color32::TRANSPARENT);
+    let n = size as i64;
+    for dot in dots {
+        let d = ((2.0 * dot.r * tpm).round() as i64).max(1);
+        let tx = ((dot.gx - center.0) * tpm as f64 + size as f64 * 0.5) as i64;
+        let ty = (size as f64 * 0.5 - (dot.gy - center.1) * tpm as f64) as i64;
         let (neg, pos) = (d / 2, d - d / 2);
-        let n = size as i64;
         for y in (ty - neg).max(0)..(ty + pos).min(n) {
             for x in (tx - neg).max(0)..(tx + pos).min(n) {
-                img.pixels[(y * n + x) as usize] = col;
+                img.pixels[(y * n + x) as usize] = dot.color;
             }
         }
     }
@@ -1566,6 +2175,44 @@ fn rasterize_objects(world: &World, center: (f64, f64), size: usize, tpm: f32, o
 /// LLNetMap::renderPropertyLinesForRegion: south / west parcel lines of
 /// every 4 m cell, north and east region borders, for sale cells filled.
 fn rasterize_parcels(world: &World, center: (f64, f64), size: usize, tpm: f32, for_sale: bool, collision: bool) -> egui::ColorImage {
+    let half_m = size as f64 / tpm as f64 * 0.5;
+    draw_parcels(&parcel_inputs(world, center, half_m, collision), center, size, tpm, for_sale)
+}
+
+/// One region's parcel data for the map: its place, its overlay of 4 m
+/// cells and the parcel we may not enter, when it is in that region.
+pub(crate) struct ParcelRegion {
+    origin: (f64, f64),
+    size: (f64, f64),
+    overlay: Option<(u32, u32, Vec<u8>)>,
+    banned: Option<crate::world::worldmap::Collision>,
+}
+
+/// The regions within `half_m` of `center`, ready to draw without the world.
+pub(crate) struct ParcelInputs {
+    regions: Vec<ParcelRegion>,
+}
+
+fn parcel_inputs(world: &World, center: (f64, f64), half_m: f64, collision: bool) -> ParcelInputs {
+    let mut regions = Vec::new();
+    for (h, r) in &world.regions {
+        let (ox, oy) = aurora_net::handle_to_origin(*h);
+        let (w, hh) = (r.heightmap.size_x as f64, r.heightmap.size_y as f64);
+        let (x0, y0) = (ox as f64, oy as f64);
+        if x0 > center.0 + half_m || y0 > center.1 + half_m || x0 + w < center.0 - half_m || y0 + hh < center.1 - half_m {
+            continue;
+        }
+        regions.push(ParcelRegion {
+            origin: (x0, y0),
+            size: (w, hh),
+            overlay: world.map.overlays.get(h).cloned(),
+            banned: world.map.collision.as_ref().filter(|c| collision && c.handle == *h).cloned(),
+        });
+    }
+    ParcelInputs { regions }
+}
+
+fn draw_parcels(inputs: &ParcelInputs, center: (f64, f64), size: usize, tpm: f32, for_sale: bool) -> egui::ColorImage {
     let mut img = egui::ColorImage::filled([size, size], Color32::TRANSPARENT);
     let n = size as i64;
     let to_tex = |gx: f64, gy: f64| -> (i64, i64) {
@@ -1580,15 +2227,11 @@ fn rasterize_parcels(world: &World, center: (f64, f64), size: usize, tpm: f32, f
         }
     };
     let half_m = size as f64 / tpm as f64 * 0.5;
-    for (h, r) in &world.regions {
-        let (ox, oy) = aurora_net::handle_to_origin(*h);
-        let (w, hh) = (r.heightmap.size_x as f64, r.heightmap.size_y as f64);
-        let (x0, y0) = (ox as f64, oy as f64);
-        if x0 > center.0 + half_m || y0 > center.1 + half_m || x0 + w < center.0 - half_m || y0 + hh < center.1 - half_m {
-            continue;
-        }
-        let banned = world.map.collision.as_ref().filter(|c| collision && c.handle == *h);
-        if let Some((cx, cy, data)) = world.map.overlays.get(h) {
+    for region in &inputs.regions {
+        let (x0, y0) = region.origin;
+        let (w, hh) = region.size;
+        let banned = region.banned.as_ref();
+        if let Some((cx, cy, data)) = &region.overlay {
             for j in 0..*cy {
                 for i in 0..*cx {
                     let b = data[(j * cx + i) as usize];
@@ -1850,6 +2493,9 @@ mod dot_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod combat_tests;
 
 #[cfg(test)]
 mod beacon_tests {

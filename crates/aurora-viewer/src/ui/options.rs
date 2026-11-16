@@ -381,6 +381,12 @@ const UNDO_SECONDS: f64 = 8.0;
 #[derive(Default)]
 pub struct OptionsUi {
     saved_graphics: saved_graphics::Editor,
+    pub(crate) tactical_context: crate::combat::tactical::Context,
+    /// A tab of the Combat window another page asked to open.
+    pub(crate) combat_goto: Option<usize>,
+    pub(crate) combat_allies: crate::ui::combat_allies::View,
+    pub(crate) combat_reward_selected: usize,
+    pub(crate) combat_medal_images: HashMap<uuid::Uuid, egui::TextureHandle>,
     pub current_parcel: Option<crate::world::parcel_visibility::Entry>,
     pub selected_parcel: Option<crate::world::parcel_visibility::Entry>,
     pub rlva_tools: super::rlva::Tools,
@@ -672,6 +678,10 @@ pub struct OptionsResult {
     pub clear_cache: bool,
     /// Devices, volumes or voice settings changed: apply to the audio engine.
     pub audio_changed: bool,
+    /// A Combat 2.0 reward row requested its configured sound/image preview.
+    pub combat_preview: Option<usize>,
+    /// A Combat sound field asked for its sound, at this volume.
+    pub combat_test_sound: Option<(uuid::Uuid, f32)>,
     /// List the audio devices again.
     pub refresh_devices: bool,
     /// Every setting went back to its default.

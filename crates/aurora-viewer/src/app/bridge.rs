@@ -110,6 +110,244 @@ impl App {
             self.send(command);
         }
         let endpoint = self.sync_bridge_queries();
+        for group in self.settings.maps.tactical.group_colors.keys() {
+            if self.settings.maps.tactical.dots_enabled {
+                self.world.group_data.ensure_members(*group);
+            }
+        }
+        let group = self.world.groups.active;
+        if self.settings.maps.tactical.share_group || self.settings.maps.tactical.ping_audience == 2 {
+            self.world.group_data.ensure_members(group);
+        }
+        let allied_group = {
+            let t = &self.settings.maps.tactical;
+            t.available() && t.allies.enabled && t.allies.active_group && !group.is_nil()
+        };
+        if allied_group {
+            self.world.group_data.ensure_members(group);
+        }
+        let group_members = if self.settings.maps.tactical.share_group || self.settings.maps.tactical.ping_audience == 2 {
+            self.world.group_data.get(&group).filter(|g| g.members_complete)
+        } else {
+            None
+        };
+        // Allies (Allies tab): ticked residents, the worn group and allied group titles.
+        let ally_ids = {
+            let t = &self.settings.maps.tactical;
+            if t.available() {
+                t.allies.resolve(&self.world, &t.recipients)
+            } else {
+                Default::default()
+            }
+        };
+        let allies_ready = !allied_group || self.world.group_data.get(&group).is_some_and(|g| g.members_complete);
+        {
+            use base64::{Engine, engine::general_purpose::STANDARD};
+            let cfg = &mut self.settings.maps.tactical;
+            // Expiry must also run when the minimap window is closed.
+            cfg.prune();
+            if !cfg.pings_enabled {
+                cfg.session.stop_pings();
+            }
+            for (sender, payload) in std::mem::take(&mut self.bridge_runtime.tactical_events) {
+                if !cfg.available() || !cfg.share || !cfg.receive_enabled || payload.len() > 640 {
+                    continue;
+                }
+                let selected = cfg.recipients.get(&sender) == Some(&true) || group_members.is_some_and(|g| g.members.contains_key(&sender));
+                // An ally may send pings (not marker sets, which only the selected can).
+                let ally = ally_ids.contains(&sender);
+                if !selected
+                    && !ally
+                    && !cfg
+                        .session
+                        .pings
+                        .iter()
+                        .any(|p| p.sender == sender || p.own() && p.recipients.contains(&sender))
+                {
+                    continue;
+                }
+                let Ok(bytes) = STANDARD.decode(&payload) else {
+                    cfg.session.share_error = true;
+                    continue;
+                };
+                if let Ok(message) = serde_json::from_slice::<crate::combat::pings::Message>(&bytes) {
+                    use crate::combat::pings::Action;
+                    let participant = match &message.action {
+                        Action::Place { .. } => false,
+                        Action::Acknowledge { id } => cfg
+                            .session
+                            .pings
+                            .iter()
+                            .any(|p| p.own() && p.marker.id == *id && p.recipients.contains(&sender)),
+                        Action::Cancel { id } | Action::Contact { id } => {
+                            cfg.session.pings.iter().any(|p| p.sender == sender && p.marker.id == *id)
+                        }
+                    };
+                    if selected || ally || participant {
+                        cfg.accept_ping(sender, message, Instant::now());
+                    }
+                } else if !selected {
+                    continue;
+                } else if let Ok(chunk) = serde_json::from_slice::<crate::combat::transfer::Chunk>(&bytes) {
+                    cfg.session.share_error |= cfg.session.inbox.accept(sender, chunk, Instant::now()).is_err();
+                } else {
+                    cfg.session.share_error = true;
+                }
+            }
+            let outgoing: Vec<_> = if cfg.available()
+                && cfg.share
+                && cfg.send_enabled
+                && endpoint.is_some()
+                && (cfg.ping_audience != 2 || group_members.is_some())
+                && (cfg.ping_audience != crate::combat::allies::AUDIENCE || allies_ready)
+            {
+                cfg.session.outgoing.drain(..cfg.session.outgoing.len().min(1)).collect()
+            } else {
+                if !cfg.available() || !cfg.share || !cfg.send_enabled {
+                    cfg.session.stop_sharing();
+                }
+                Vec::new()
+            };
+            let mut commands = Vec::new();
+            if cfg.available()
+                && cfg.share
+                && cfg.send_enabled
+                && let Some(endpoint) = endpoint.as_ref()
+            {
+                let mut payloads = Vec::new();
+                for (marker, kind) in outgoing {
+                    if !cfg.session.pings.iter().any(|p| p.marker.id == marker.id) {
+                        continue;
+                    }
+                    let id = marker.id;
+                    let encoded = serde_json::to_vec(&crate::combat::pings::Message::new(crate::combat::pings::Action::Place {
+                        id,
+                        position: marker.position,
+                        kind,
+                    }));
+                    let Ok(bytes) = encoded else {
+                        cfg.session.share_error = true;
+                        continue;
+                    };
+                    if !marker.valid() || bytes.len() > 480 {
+                        cfg.session.share_error = true;
+                        continue;
+                    }
+                    payloads.push((bytes, true, Some(id), None));
+                }
+                // A response/cancel keeps its original recipients even when the
+                // player subsequently changes the placement audience.
+                if let Some(control) = cfg.session.ping_controls.pop_front()
+                    && let Ok(bytes) = serde_json::to_vec(&control.message)
+                {
+                    payloads.push((bytes, true, None, Some(control.targets)));
+                }
+                if (!cfg.share_group || group_members.is_some())
+                    && cfg
+                        .session
+                        .last_set_send
+                        .is_none_or(|at| at.elapsed() >= Duration::from_millis(100))
+                    && let Some(chunk) = cfg.session.set_outgoing.pop_front()
+                {
+                    cfg.session.last_set_send = Some(Instant::now());
+                    payloads.push((chunk.into_bytes(), false, None, None));
+                }
+                for (bytes, ping, ping_id, explicit_targets) in payloads {
+                    if bytes.len() <= 480 {
+                        let payload = STANDARD.encode(bytes);
+                        let recipients: std::collections::BTreeSet<Uuid> = cfg
+                            .recipients
+                            .iter()
+                            .filter(|(_, on)| **on && (!ping || cfg.ping_audience == 1))
+                            .map(|(id, _)| *id)
+                            .chain(
+                                group_members
+                                    .filter(|_| if ping { cfg.ping_audience == 2 } else { cfg.share_group })
+                                    .into_iter()
+                                    .flat_map(|g| g.members.keys().copied()),
+                            )
+                            .chain(
+                                ally_ids
+                                    .iter()
+                                    .copied()
+                                    .filter(|_| ping && cfg.ping_audience == crate::combat::allies::AUDIENCE),
+                            )
+                            .filter(|id| *id != self.world.agent_id && !id.is_nil())
+                            .collect();
+                        let recipients: Vec<_> = explicit_targets.unwrap_or_else(|| recipients.into_iter().collect());
+                        let invalid_recipients = recipients.is_empty() || recipients.len() > 512;
+                        if let Some(id) = ping_id
+                            && let Some(own) = cfg.session.pings.iter_mut().find(|p| p.own() && p.marker.id == id)
+                        {
+                            own.recipients = if invalid_recipients {
+                                Default::default()
+                            } else {
+                                recipients.iter().copied().collect()
+                            };
+                            own.sharing = if invalid_recipients {
+                                crate::combat::pings::ShareState::Failed
+                            } else {
+                                crate::combat::pings::ShareState::Attempted
+                            };
+                        }
+                        if invalid_recipients {
+                            cfg.session.share_error = true;
+                            if !ping {
+                                cfg.session.set_outgoing.clear();
+                            }
+                            continue;
+                        }
+                        let batch_size = ((700 - payload.len()) / 37).clamp(1, 16);
+                        for targets in recipients.chunks(batch_size) {
+                            commands.push(NetCommand::BridgeQuery {
+                                request: Uuid::new_v4(),
+                                endpoint: endpoint.clone(),
+                                query: aurora_net::bridge::query::Query::Tactical {
+                                    targets: targets.to_vec(),
+                                    payload: payload.clone(),
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+            if std::mem::take(&mut cfg.session.sound_pending)
+                && cfg.ping_sound
+                && let crate::ui::combat_cards::AssetId::Id(id) = crate::ui::combat_cards::asset_id(&cfg.sound_asset)
+            {
+                self.scene.sounds.play_ui_gain(self.audio_engine.as_ref(), id, cfg.sound_volume);
+            }
+            for command in commands {
+                self.send(command);
+            }
+        }
+        for ping in &self.settings.maps.tactical.session.pings {
+            if !ping.own() {
+                self.world.social.want_name(ping.sender);
+            }
+            for responder in &ping.responders {
+                self.world.social.want_name(*responder);
+            }
+        }
+        if let Some(endpoint) = endpoint.as_ref() {
+            let enabled = self.settings.combat.active();
+            let now = Instant::now();
+            if enabled && self.combat_subscription.is_some_and(|(_, was, _)| !was) && self.chat_ui.combat.received > 0 {
+                self.chat_ui.combat.awards.invalidate();
+            }
+            if self.combat_subscription.is_none_or(|(epoch, previous, at)| {
+                epoch != endpoint.token || previous != enabled || now.duration_since(at).as_secs() >= 10
+            }) {
+                self.combat_subscription = Some((endpoint.token, enabled, now));
+                self.send(NetCommand::BridgeQuery {
+                    request: Uuid::new_v4(),
+                    endpoint: endpoint.clone(),
+                    query: aurora_net::bridge::query::Query::Combat(enabled),
+                });
+            }
+        } else {
+            self.combat_subscription = None;
+        }
         let (command, message) = self.bridge_services.update(endpoint.as_ref(), Instant::now());
         if let Some(command) = command {
             self.send(command);

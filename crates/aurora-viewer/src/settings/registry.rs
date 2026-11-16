@@ -25,12 +25,15 @@ use serde_json::{Map, Value};
 
 /// Settings of the login and of this PC, or that another path has to change
 /// (the cache folder moves its files, the version drives the migrations).
+/// The tactical group switch mirrors the allied group
+/// (`Tactical::migrate_audience`): a value set here would not hold.
 const HIDDEN: &[&str] = &[
     "settings_version",
     "cache_location",
     "chat_log_location",
     "window_fullscreen",
     "new_profile",
+    "maps.tactical.share_group",
 ];
 
 /// A vector shown as one row has at most this many numbers (LLQuaternion,

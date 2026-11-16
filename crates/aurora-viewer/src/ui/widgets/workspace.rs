@@ -543,6 +543,8 @@ pub(super) fn window_icon(id: &str) -> &'static str {
         "wearable_favorites" => "hanger-2-filled",
         "search" => "search-filled",
         "options" => "settings-filled",
+        "combat_workspace" => "swords",
+        "combat_marker_editor" => "map-pin-filled",
         "worldmap" | "minimap" => "map",
         "beacons" => "radar-filled",
         "environment_selector" | "personal_lighting" => "sun-filled",

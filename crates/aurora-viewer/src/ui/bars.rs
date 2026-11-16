@@ -1501,6 +1501,14 @@ fn main_menus(ui: &mut egui::Ui, p: &Palette, panels: &mut Panels, st: &StatusIn
             flip_window(
                 ui,
                 p,
+                "swords",
+                aurora_i18n::tr!("combat-title"),
+                crate::ui::combat_window::WINDOW,
+                &mut panels.combat,
+            );
+            flip_window(
+                ui,
+                p,
                 "code-circle-filled",
                 toolbox,
                 crate::ui::dev_toolbox::WINDOW,
@@ -2655,6 +2663,7 @@ pub fn run_command(ctx: &egui::Context, cmd: &str, panels: &mut Panels) -> BarAc
         // the Legacy Viewer's Statistics (Floater.Toggle stats) opens
         // Aurora's Performance window
         "performance" | "statistics" => toggle("perf", &mut panels.perf),
+        "combat" => toggle(super::combat_window::WINDOW, &mut panels.combat),
         "snapshot" => toggle(super::snapshot::WINDOW, &mut panels.snapshot),
         // File.TakeSnapshotToDisk: a photo saved with the last settings,
         // without the window (the keyboard's Save to disk)
@@ -2769,6 +2778,7 @@ fn command_active(cmd: &str, panels: &Panels, flying: bool, seated: bool, mousel
         "omnifilter" => panels.omnifilter,
         "conversation_log" => panels.conversation_log,
         "performance" | "statistics" => panels.perf,
+        "combat" => panels.combat,
         "snapshot" => panels.snapshot,
         "beacons" => panels.beacons,
         "quickprefs" => panels.quick_prefs,
@@ -4366,6 +4376,7 @@ mod tests {
                 p.wearable_favorites
             }),
             ("gridstatus", super::super::grid_status::WINDOW, |p| p.grid_status),
+            ("combat", super::super::combat_window::WINDOW, |p| p.combat),
             ("webbrowser", super::super::web_browser::WINDOW, |p| p.web_browser),
             ("avatar", super::super::avatar_welcome::WINDOW, |p| p.avatar_welcome),
             ("destinations", super::super::destinations::WINDOW, |p| p.destinations),

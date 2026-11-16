@@ -2024,6 +2024,29 @@ remain in progress.
 
 ## `aurora-viewer` in detail
 
+Combat 2.0 lives in `combat.rs` and `combat/{ui,wire,awards,allies,journal,pings,ping_ui,navigation,sets,tactical,transfer,undo}.rs`,
+with `ui/combat_window.rs`, `ui/combat_rewards.rs`, `ui/combat_allies.rs`, `ui/combat_editor.rs`, and its tabs of cards in `ui/combat_pages.rs`, `ui/combat_cards.rs` and `ui/combat_sharing.rs`.
+`combat/allies.rs` resolves who counts as an ally (the ticked residents, shared with the Sharing teammates, the worn
+group, and group titles worn around us): `app/bridge.rs` sends pings to them (audience 3) and accepts theirs, and
+the minimap draws them in their own colour.
+`combat/wire.rs` validates the official DEATH-only relay (helper 1.42, version-2 JSON envelope) with
+sequence/identity checks and bounded queues; `combat/awards.rs` holds the local multikill, life-streak and
+opponent-record rules; `combat/journal.rs` keeps the full session in memory and appends an acknowledged JSONL
+log on a background writer. `combat/tactical.rs` keeps the saved mini-map tool settings apart from the live
+`tactical::Session` (pings in flight and their queues, cooldowns and replay guards, marker set transfers, undo
+history, drawing and editing gestures), which one `reset` ends at logout and which never reaches the settings file.
+`app/map_export.rs` saves the annotated map: the save dialog first, then
+copies of what the picture needs (`ui/minimap.rs` `ExportInputs`: the terrain, the objects already picked and
+coloured, the parcel overlays) go to a worker that rasterises, renders the markers (`combat/export.rs`) and writes
+the PNG, while the editor's button waits for its word. `combat/pings.rs` owns session-only version-4 Place/Contact/Acknowledge/Cancel
+messages with authenticated sender binding, replay guards and out-of-order control; `combat/{ping_ui,navigation}.rs`
+provide the native four-sector hold wheel and off-camera edge guidance; `combat/{sets,transfer}.rs` own
+region/grid-scoped annotation sets and bounded multipart sharing. The reward studio shares its presentation
+metadata with the staged in-world medal banner, and `ui/combat_editor.rs` is an independent region canvas over
+the active set. Settings live in a native floater (Me > Advanced > Combat); DAMAGE never plays a sound, marker or award.
+`combat/undo.rs` holds the one-step undo of a removal in the Combat window (a card reset, the ticked allies cleared, a marker set removed): the settings as they were, kept in the tactical session for 8 seconds like the undo of a reset in Preferences, and put back without touching the live session. `ui/combat_cards.rs` draws its strip and the confirmation asked before the allies or a set with markers go.
+`combat/feed.rs` builds the kill feed rows (filters, damage type names, ally and friendly-fire marks, the test mode's made-up kills), lays them out in the compact or card style and handles the drag with edge snapping; `combat/ui.rs` only collects the entries.
+
 Inventory local-file thumbnails prepare whole-image square scaling
 (LLViewerTextureList::convertToUploadFile with force_square), proportional fit
 with transparent margins, and a movable crop on bounded background jobs in

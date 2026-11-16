@@ -161,6 +161,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "content: Firestorm's colors of the mini-map (objects, avatars, tracking) and its marks over the map",
     ),
     (
+        "ui/combat_annotate.rs",
+        COLOR,
+        "content: the markers of a map in their own colours, with a halo and a contrast ink that read over any map",
+    ),
+    (
         "ui/worldmap/mod.rs",
         COLOR,
         "content: the ocean, the marks and the legend of the world map, drawn over its tiles",
@@ -189,6 +194,7 @@ const MARKER: &str = "// theme-guard:";
 const ROOTS: &[&str] = &[
     "ui",
     "build/ui",
+    "combat",
     "crash/window.rs",
     "splash/window.rs",
     "imports/ui",

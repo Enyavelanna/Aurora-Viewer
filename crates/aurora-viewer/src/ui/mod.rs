@@ -18,6 +18,14 @@ pub mod bars;
 pub mod bidi;
 pub mod blacklist;
 pub mod bumps;
+pub(crate) mod combat_allies;
+pub(crate) mod combat_annotate;
+pub(crate) mod combat_cards;
+pub(crate) mod combat_editor;
+pub(crate) mod combat_pages;
+pub(crate) mod combat_rewards;
+pub(crate) mod combat_sharing;
+pub(crate) mod combat_window;
 pub mod sound_explorer;
 pub mod voice_controls;
 // Bug report form (disabled, see main.rs):
@@ -168,6 +176,7 @@ pub struct Panels {
     /// The Dev Toolbox (Advanced › Dev Toolbox, Ctrl+Alt+D).
     pub debug_settings: bool,
     pub dev_toolbox: bool,
+    pub combat: bool,
     /// Advanced › Region console (SimConsoleAsync, estate managers).
     pub sim_console: bool,
     /// Group titles (FSFloaterGroupTitles): the toolbar's command and
@@ -273,6 +282,7 @@ impl Panels {
             perf: settings.show_perf,
             debug_settings: false,
             dev_toolbox: false,
+            combat: false,
             sim_console: false,
             group_titles: false,
             wearable_favorites: false,

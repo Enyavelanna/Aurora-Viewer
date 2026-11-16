@@ -66,6 +66,7 @@ mod describe;
 mod dev_toolbox;
 mod folders;
 mod hover_pick;
+mod map_export;
 mod texture_picker;
 mod typing_pointer;
 use folders::chat_log_root;
@@ -432,6 +433,10 @@ pub struct App {
     window_icon: Option<winit::window::Icon>,
     world: World,
     bridge_runtime: crate::world::bridge::Bridge,
+    combat_subscription: Option<(uuid::Uuid, bool, Instant)>,
+    tactical_press: Option<crate::combat::ping_ui::Press>,
+    /// The last Combat autosave tick.
+    combat_saved: Instant,
     /// The RLVa self-test (Dev Toolbox T1, development builds only).
     rlva_selftest: rlva_selftest::SelfTest,
     native_anchor: crate::movement::movelock::Controller,
@@ -816,6 +821,7 @@ pub struct App {
     describe: Option<describe::Pending>,
     /// The Dev Toolbox: the window's state, and the app's (app/dev_toolbox.rs).
     dev_toolbox: ui::dev_toolbox::DevToolboxUi,
+    combat_window: ui::combat_window::CombatWindow,
     toolbox: dev_toolbox::Toolbox,
     /// The region console's command line (Advanced › Region console).
     sim_console_input: ui::sim_console::ConsoleInput,
@@ -1249,6 +1255,9 @@ pub struct App {
     neighbours_refused: bool,
     /// The cache and transcript folders being chosen (app/folders.rs).
     folders: folders::Folders,
+    /// The picture of the annotated map being made on a worker
+    /// (app/map_export.rs): its message when it is done.
+    map_export: Option<std::sync::mpsc::Receiver<String>>,
     chat_import: chat_import::ChatImport,
     /// The settings backup being written or read (app/settings_backup.rs).
     settings_backup: settings_backup::Job,
@@ -1755,6 +1764,9 @@ impl App {
                 w
             },
             bridge_runtime: Default::default(),
+            combat_subscription: None,
+            tactical_press: None,
+            combat_saved: Instant::now(),
             rlva_selftest: Default::default(),
             native_anchor: Default::default(),
             anchor_stands: Default::default(),
@@ -1958,6 +1970,7 @@ impl App {
             attachments_logged: 0,
             describe: None,
             dev_toolbox: Default::default(),
+            combat_window: Default::default(),
             toolbox: Default::default(),
             sim_console_input: Default::default(),
             loading_frac: 0.0,
@@ -2238,6 +2251,7 @@ impl App {
             auto_away: false,
             neighbours_refused: false,
             folders: Default::default(),
+            map_export: None,
             settings_backup: Default::default(),
             stream_list: Default::default(),
             capture: std::env::var_os("AURORA_CAPTURE").map(|p| {
@@ -3507,7 +3521,14 @@ impl App {
         if let Some(g) = &mut self.gfx {
             self.scene.clear(&mut g.renderer);
         }
+        self.chat_ui.combat.journal.flush(&self.chat_ui.combat.history);
         self.world.reset();
+        self.chat_ui.combat = Default::default();
+        self.minimap_ui = Default::default();
+        self.people_map_ui = Default::default();
+        self.bridge_runtime.clear_combat();
+        self.settings.maps.tactical.reset_session();
+        self.tactical_press = None;
         // the next session's network starts with the neighbours allowed
         self.neighbours_refused = false;
         // the transcripts shown belong to the account that leaves
@@ -4684,6 +4705,12 @@ impl App {
             }
             return;
         }
+        if self
+            .tactical_press
+            .is_some_and(|press| press.wheel(self.settings.maps.tactical.hold_ms))
+        {
+            return;
+        }
         if self.clicks.waiting() {
             // behind the click that will say what this motion drags
             self.clicks.hold(click_pick::Held::Motion(dx, dy));
@@ -4696,6 +4723,12 @@ impl App {
         if self.camera.mouselook() {
             // Alt held: the grab tool has the free cursor, the view stays
             if !self.alt_cursor.free() {
+                let zoom = if self.settings.combat.enabled {
+                    self.settings.combat.zoom_sensitivity
+                } else {
+                    0.0
+                };
+                let s = s * self.camera.zoom_look_scale(&self.settings.camera, zoom);
                 self.camera.look(dx, dy, s, &mut self.world.agent);
             }
         } else if self.mouse_mode == MouseMode::Orbit {
@@ -9503,6 +9536,16 @@ impl App {
         }
         self.follow_login_portrait(renderer);
         let mut images: Vec<uuid::Uuid> = self.profile_ui.wanted_images.drain().collect();
+        if self.settings.combat.medals || self.chat_ui.combat.preview_medal.is_some() || self.panels.combat {
+            images.extend(
+                self.settings
+                    .combat
+                    .medal_textures
+                    .iter()
+                    .filter_map(|s| uuid::Uuid::parse_str(s).ok())
+                    .filter(|id| !id.is_nil()),
+            );
+        }
         images.extend(self.avatar_textures.wanted_images.drain());
         images.extend(self.place_images.drain());
         images.extend(self.land_ui.wanted_images.drain());
@@ -10377,9 +10420,221 @@ impl App {
         }
 
         self.frame_profile.lap(Lap::Start);
+        self.settings.maps.tactical.combat_enabled = self.settings.combat.enabled;
+        if !self.settings.combat.enabled {
+            self.chat_ui.combat.voices.clear();
+            self.chat_ui.combat.medals.clear();
+            self.chat_ui.combat.medal_started = None;
+            self.chat_ui.combat.voice_after = None;
+            self.chat_ui.combat.last_kill = None;
+            self.chat_ui.combat.preview_medal = None;
+        }
+        if !self.settings.maps.tactical.available() {
+            self.settings.maps.tactical.stop_tools();
+            self.tactical_press = None;
+        }
+        if !self.settings.maps.tactical.pings_enabled {
+            self.tactical_press = None;
+            self.settings.maps.tactical.session.aimed_ping = None;
+        }
+        if self.tactical_press.is_some_and(|press| press.region != self.world.main_region) {
+            self.tactical_press = None;
+        }
         // ---- network events (time-boxed)
         let t_ev = Instant::now();
+        // the one region change detection of the frame: the bridge reads the result
+        if let Some(region) = self.world.main_region {
+            let key = crate::combat::sets::RegionKey {
+                grid: self.settings.login_uri(),
+                region,
+            };
+            self.settings.maps.tactical.enter_region(key, &self.world.region_name());
+        }
+        // Combat autosave: once a second, the working copy goes into its set
+        // and the file is written when a Combat setting was marked unsaved
+        // (the window close and the logout save on their own).
+        if self.combat_saved.elapsed() >= Duration::from_secs(1) {
+            self.settings.maps.tactical.save_set();
+            if std::mem::take(&mut self.settings.maps.tactical.session.unsaved) && !self.demo {
+                self.settings.save();
+            }
+            self.combat_saved = Instant::now();
+        }
         self.world.events_this_frame = 0;
+        if self.demo && std::env::var_os("AURORA_DEMO_COMBAT").is_some() {
+            let ping_demo = std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| matches!(value.as_str(), "pings" | "ping-wheel"));
+            let navigation_demo = ping_demo || std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "navigation");
+            if self.frame_count == 600 {
+                self.world.chat_log.set_grid("demo".into());
+                self.world.chat_log.login_named(self.world.agent_id, None);
+                self.panels.chat = !navigation_demo;
+                self.panels.minimap = true;
+                self.panels.people = false;
+                let rect = self.egui_ctx.content_rect();
+                ui::widgets::place_floater(
+                    &self.egui_ctx,
+                    "conversations",
+                    egui::pos2(16.0, (rect.bottom() - 364.0).max(80.0)),
+                    egui::vec2(760.0, 300.0),
+                );
+                self.chat_ui.combat_selected = true;
+                let workspace_demo = navigation_demo
+                    || std::env::var("AURORA_DEMO_COMBAT")
+                        .is_ok_and(|value| matches!(value.as_str(), "workspace" | "callouts" | "allies" | "feed" | "feed-cards"));
+                self.settings.combat.journal = true;
+                self.settings.combat.killmarker = !workspace_demo;
+                self.settings.combat.medals = !workspace_demo;
+                self.settings.combat.feed = !workspace_demo;
+                self.settings.combat.feed_position = crate::combat::Settings::default().feed_position;
+                self.settings.maps.tactical.enabled = true;
+                if std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "allies") {
+                    // The demo avatars all wear the title "Aurora": that tag allies them,
+                    // and the nearest one is also ticked by name.
+                    self.settings.combat.enabled = true;
+                    self.settings.maps.tactical.tools_enabled = true;
+                    self.settings.maps.tactical.allies.add_tag("Aurora");
+                    let nearest = ui::minimap::avatars(&self.world).into_iter().next().map(|(id, ..)| id);
+                    if let Some(id) = nearest {
+                        self.settings.maps.tactical.recipients.insert(id, true);
+                    }
+                    self.panels.minimap = true;
+                }
+                if let Ok(value) = std::env::var("AURORA_DEMO_COMBAT")
+                    && matches!(value.as_str(), "feed" | "feed-cards")
+                {
+                    // The kill feed in its test mode, with its made-up kills.
+                    self.settings.combat.enabled = true;
+                    self.settings.combat.feed = true;
+                    self.settings.combat.feed_test = true;
+                    self.settings.combat.feed_position = [0.55, 0.22];
+                    self.settings.combat.feed_style = if value == "feed" {
+                        crate::combat::feed::STYLE_COMPACT
+                    } else {
+                        crate::combat::feed::STYLE_CARDS
+                    };
+                }
+                if std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "callouts") {
+                    let (x, y) = ui::minimap::to_global(&self.world, self.world.agent.position);
+                    self.settings.maps.tactical.markers =
+                        crate::combat::tactical::demo_callouts([x, y], self.world.agent.position.z as f64);
+                    self.settings.maps.tactical.session.editing = true;
+                }
+                self.settings.maps.tactical.pings_enabled = navigation_demo || !workspace_demo;
+                if navigation_demo {
+                    self.settings.combat.enabled = true;
+                    self.settings.maps.tactical.tools_enabled = true;
+                    self.settings.maps.tactical.offscreen_pings = true;
+                    self.panels.minimap = false;
+                    self.settings.maps.tactical.session.pings.clear();
+                    for (n, (dx, dy, kind)) in [(45.0, 0.0, 1), (46.0, 1.0, 3), (-45.0, 0.0, 2), (0.0, 45.0, 0), (0.0, -45.0, 3)]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        self.settings.maps.tactical.session.pings.push(crate::combat::tactical::Ping::new(
+                            crate::combat::tactical::Marker {
+                                id: uuid::Uuid::new_v4(),
+                                name: crate::combat::tactical::kind_name(kind).into(),
+                                position: [
+                                    self.world.main_origin().map_or(0, |o| o.0) as f64 + self.world.agent.position.x as f64 + dx,
+                                    self.world.main_origin().map_or(0, |o| o.1) as f64 + self.world.agent.position.y as f64 + dy,
+                                    self.world.agent.position.z as f64 + 2.0,
+                                ],
+                                color: self.settings.maps.tactical.colors[kind],
+                                ..Default::default()
+                            },
+                            kind,
+                            Instant::now() + Duration::from_millis(n as u64),
+                        ));
+                    }
+                }
+                let (x, y) = ui::minimap::to_global(&self.world, self.world.agent.position);
+                self.settings
+                    .maps
+                    .tactical
+                    .add_marker([x + 12.0, y - 8.0, self.world.agent.position.z as f64]);
+                self.settings.maps.tactical.markers[0].radius = 6.0;
+                for (shape, start, end) in [
+                    (
+                        crate::combat::tactical::Shape::Square,
+                        [x - 22.0, y + 10.0, 30.0],
+                        [x - 10.0, y + 22.0, 30.0],
+                    ),
+                    (
+                        crate::combat::tactical::Shape::Line,
+                        [x - 22.0, y - 18.0, 30.0],
+                        [x + 20.0, y - 12.0, 30.0],
+                    ),
+                ] {
+                    if let Some(marker) = crate::combat::tactical::Marker::drawn(shape, start, end, self.settings.maps.tactical.colors[2]) {
+                        self.settings.maps.tactical.markers.push(marker);
+                    }
+                }
+            }
+            if ping_demo && self.frame_count == 620 {
+                let cfg = &mut self.settings.maps.tactical;
+                cfg.seconds = 30.0;
+                cfg.distances = true;
+                cfg.share = true;
+                cfg.send_enabled = true;
+                cfg.ping_audience = 1;
+                let alex = uuid::Uuid::from_u128(0xc201);
+                let mika = uuid::Uuid::from_u128(0xc202);
+                self.world.social.names.insert(alex, "Alex Rivers".into());
+                self.world.social.names.insert(mika, "Mika Stone".into());
+                cfg.session.pings.clear();
+                let forward = self.camera.forward();
+                let right = forward.cross(Vec3::Z).normalize_or(Vec3::Y);
+                let (ox, oy) = self.world.main_origin().unwrap_or_default();
+                for (offset, height, kind, sender) in [(-8.0, 6.0, 1, alex), (8.0, 0.0, 3, mika), (0.0, 0.0, 2, uuid::Uuid::nil())] {
+                    let point = self.camera.position + forward * 32.0 + right * offset + Vec3::Z * height;
+                    let mut ping = crate::combat::tactical::Ping::new(
+                        crate::combat::tactical::Marker {
+                            id: uuid::Uuid::new_v4(),
+                            position: [ox as f64 + point.x as f64, oy as f64 + point.y as f64, point.z as f64],
+                            name: crate::combat::tactical::kind_name(kind).into(),
+                            color: cfg.colors[kind],
+                            ..Default::default()
+                        },
+                        kind,
+                        Instant::now(),
+                    );
+                    ping.sender = sender;
+                    if ping.own() {
+                        ping.responders.insert(alex);
+                        ping.sharing = crate::combat::pings::ShareState::Attempted;
+                    }
+                    cfg.session.pings.push(ping);
+                }
+                if std::env::var("AURORA_DEMO_COMBAT").is_ok_and(|value| value == "ping-wheel") {
+                    self.tactical_press = Some(crate::combat::ping_ui::Press {
+                        since: Instant::now() - Duration::from_secs(1),
+                        point: cfg.session.pings.last().map(|p| p.marker.position),
+                        center: self.egui_ctx.content_rect().center(),
+                        target: None,
+                        upgrade: None,
+                        contact: false,
+                        region: self.world.main_region,
+                    });
+                }
+            }
+            if !navigation_demo && self.frame_count >= 600 && self.frame_count.is_multiple_of(60) {
+                let kind = "DEATH";
+                let report = serde_json::json!({"event":kind,"owner":self.world.agent_id,"target":crate::demo::DEMO_FRIEND,"damage":25.0,"type":5,"weapon":"Demo weapon"});
+                if let Some(event) = crate::combat::wire::official(&report, Some(true), Some("Demo weapon".into())) {
+                    self.chat_ui
+                        .combat
+                        .record(event, self.world.agent_id, &self.settings.combat, Instant::now());
+                }
+                if (self.frame_count - 600).is_multiple_of(240) {
+                    let (x, y) = ui::minimap::to_global(&self.world, self.world.agent.position);
+                    self.settings.maps.tactical.session.pings.clear();
+                    self.settings.maps.tactical.ping(
+                        [x + 8.0, y + 5.0, self.world.agent.position.z as f64],
+                        ((self.frame_count - 600) / 240) as usize % 4,
+                    );
+                }
+            }
+        }
         self.sync_script_debug();
         self.world.received_items.enabled = self.settings.sort_received_items;
         // FSMarkObjects, before the frame's events: the first lines after
@@ -10420,6 +10675,53 @@ impl App {
             self.pump_network_events(t_ev);
         }
         self.net_profile.events_left(self.net.events.len());
+        let now = Instant::now();
+        let lost = self.bridge_runtime.take_combat_loss();
+        self.chat_ui.combat.note_loss(lost);
+        if lost > 0 {
+            self.world.system_message(aurora_i18n::tr!("combat-loss", count = lost));
+        }
+        for mut event in self.bridge_runtime.take_combat_events() {
+            if !self.settings.combat.active() {
+                continue;
+            }
+            if event.weapon.is_none() {
+                event.weapon = event
+                    .rezzer
+                    .and_then(|id| self.known_object_name(&id))
+                    .or_else(|| event.source.and_then(|id| self.known_object_name(&id)));
+            }
+            let cfg = &self.settings.combat;
+            if event.own_kill(self.world.agent_id)
+                && cfg.kill_sound
+                && let crate::ui::combat_cards::AssetId::Id(id) = crate::ui::combat_cards::asset_id(&cfg.kill_asset)
+            {
+                self.scene.sounds.play_ui_gain(self.audio_engine.as_ref(), id, cfg.kill_volume);
+            }
+            self.chat_ui
+                .wanted_names
+                .extend([event.actor, event.target].into_iter().filter(|id| !id.is_nil()));
+            self.chat_ui.combat.record(event, self.world.agent_id, cfg, now);
+        }
+        if self.settings.combat.journal
+            && let Some(folder) = self.world.chat_log.dir()
+        {
+            self.chat_ui.combat.journal.open(&folder.join("combat"));
+        }
+        self.chat_ui.combat.journal.poll(&self.chat_ui.combat.history);
+        if let Some(count) = self.chat_ui.combat.journal.cleared.take() {
+            let state = &mut self.chat_ui.combat;
+            let count = count.min(state.history.len());
+            state.history.drain(..count);
+            state.personal = state.personal.iter().filter_map(|i| i.checked_sub(count)).collect();
+        }
+        if self.chat_ui.combat.journal.error.is_some() && !self.chat_ui.combat.journal.warned {
+            self.chat_ui.combat.journal.warned = true;
+            self.world.system_message(aurora_i18n::tr!("combat-journal-error"));
+        }
+        if let Some((id, gain)) = self.chat_ui.combat.voice(&self.settings.combat, now) {
+            self.scene.sounds.play_ui_gain(self.audio_engine.as_ref(), id, gain);
+        }
         let corrections = self.world.agent.take_corrections();
         if corrections.count > 0 {
             aurora_net::transition::step(|| format!("position of our avatar corrected by {:.2} m", corrections.largest));
@@ -17245,6 +17547,7 @@ impl App {
         self.options_ui.chat_log_custom = !self.settings.chat_log_location.is_empty();
         self.options_ui.chat_log_shared = self.world.chat_log.shared();
         self.poll_folder_pick();
+        self.poll_map_export();
         self.poll_settings_backup();
         if let Some(done) = self.world.chat_log.take_relocated() {
             self.options_ui.chat_log_status = match done {
@@ -17323,8 +17626,26 @@ impl App {
         self.options_ui.rlva_camera_fov_locked = self.world.rlva.camera_owner().is_some();
         self.options_ui.joystick = self.joystick.snapshot.clone();
         self.options_ui.flycam_active = self.joystick.active;
+        if open && (!self.options_ui.query.is_empty() || self.options_ui.modified_view) {
+            self.options_ui.tactical_context = crate::combat::tactical::Context::from_world(&self.world, &self.settings.maps.tactical);
+        }
         let before_camera = self.settings.camera.clone();
         let mut res = ui::options::show(ctx, p, &self.skin.icons, &mut self.settings, &mut self.options_ui, &mut open);
+        if let Some(slot) = res.combat_preview.take()
+            && let Some(&award) = crate::combat::awards::Award::ALL.get(slot)
+        {
+            if let Some(asset) = self.settings.combat.announcement_assets.get(slot)
+                && let Ok(id) = uuid::Uuid::parse_str(asset)
+                && !id.is_nil()
+            {
+                self.scene.sounds.play_ui_gain(
+                    self.audio_engine.as_ref(),
+                    id,
+                    self.settings.combat.voice_volume * self.settings.combat.family_volume[award.family().index()],
+                );
+            }
+            self.chat_ui.combat.preview_award(award, std::time::Instant::now());
+        }
         self.sync_appearance_camera();
         self.world.rlva.preserve_camera_settings(&mut self.settings.camera, &before_camera);
         if res.toggle_flycam {
@@ -17874,11 +18195,22 @@ impl App {
                         projector,
                         self.camera.position,
                         !self.camera.mouselook() && !(self.avatar_studio.active && self.avatar_studio.animation_editor),
-                        ui::hud::avatar_tags(
-                            self.interface.immersive,
-                            self.settings.immersive_name_tags,
-                            self.settings.show_name_tags,
-                        ),
+                        // Combat: no name tags over the crosshair in mouselook
+                        // nor under the ping wheel, whose centre says what a
+                        // release will do
+                        if self.settings.combat.enabled && self.camera.mouselook()
+                            || self
+                                .tactical_press
+                                .is_some_and(|press| press.wheel(self.settings.maps.tactical.hold_ms))
+                        {
+                            ui::hud::AvatarTags::Hidden
+                        } else {
+                            ui::hud::avatar_tags(
+                                self.interface.immersive,
+                                self.settings.immersive_name_tags,
+                                self.settings.show_name_tags,
+                            )
+                        },
                         &self.settings,
                         &mut self.name_tag_visibility,
                         &voice_levels,
@@ -18723,6 +19055,56 @@ impl App {
                     painter.text(at, egui::Align2::CENTER_BOTTOM, &text, font, p.ink.gamma_multiply(0.6));
                     aurora_render::vr_hint_marker(&painter, false);
                 }
+                self.settings.maps.tactical.prune();
+                crate::combat::tactical::world_overlay(
+                    &ctx,
+                    &p,
+                    projector,
+                    &self.world,
+                    &mut self.settings.maps.tactical,
+                    self.camera.mouselook(),
+                );
+                let tactical = &self.settings.maps.tactical;
+                let feed_allies = if self.settings.combat.feed && tactical.available() {
+                    tactical.allies.resolve(&self.world, &tactical.recipients)
+                } else {
+                    Default::default()
+                };
+                let [ar, ag, ab, aa] = tactical.allies.color;
+                let feed_moved = crate::combat::ui::overlays(
+                    &ctx,
+                    &p,
+                    &self.world,
+                    &mut self.chat_ui.combat,
+                    &mut self.settings.combat,
+                    &feed_allies,
+                    // theme-guard: content — the allies' colour the person picked.
+                    egui::Color32::from_rgba_unmultiplied(ar, ag, ab, aa),
+                    &self.ui_images,
+                );
+                if feed_moved {
+                    self.settings.maps.tactical.mark_unsaved();
+                }
+                if let Some(press) = self.tactical_press
+                    && press.wheel(self.settings.maps.tactical.hold_ms)
+                {
+                    if let Some(point) = press.point {
+                        let (ox, oy) = self.world.main_origin().unwrap_or_default();
+                        let position = Vec3::new((point[0] - ox as f64) as f32, (point[1] - oy as f64) as f32, point[2] as f32);
+                        if let Some((at, _)) = projector.project(position) {
+                            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("ping-preview")));
+                            painter.circle_stroke(at, 10.0, egui::Stroke::new(1.5, p.muted));
+                        }
+                    }
+                    crate::combat::ping_ui::wheel(&ctx, &p, &self.settings.maps.tactical, press.center, press.point.is_some());
+                } else if let Some(id) = self.settings.maps.tactical.session.aimed_ping {
+                    let at = if self.camera.mouselook() {
+                        ctx.content_rect().center()
+                    } else {
+                        ctx.input(|i| i.pointer.hover_pos()).unwrap_or(ctx.content_rect().center())
+                    };
+                    crate::combat::ping_ui::target_hint(&ctx, &p, &self.settings.maps.tactical, id, at);
+                }
                 // (a first-person VR entry is mouselook underneath: its
                 // crosshair and instructions stay off the desktop mirror)
                 if self.camera.mouselook() && !vr_active {
@@ -19056,6 +19438,7 @@ impl App {
                 });
                 let mut contacts_people = Vec::new();
                 let mut snoozes = Vec::new();
+                self.chat_ui.combat_journal_enabled = self.settings.combat.show_tab;
                 let conversation_actions = ui::chat::show(
                     &ctx,
                     &p,
@@ -20390,6 +20773,7 @@ impl App {
                         }
                         ui::minimap::MiniMapAction::Colors(k) => self.settings.colors = k,
                         ui::minimap::MiniMapAction::Close => self.panels.minimap = false,
+                        ui::minimap::MiniMapAction::OpenMarkerEditor => self.combat_window.open_editor(),
                     }
                 }
                 let mut open = self.panels.world_map;
@@ -20443,6 +20827,51 @@ impl App {
                 self.monitor_actions(monitor_actions);
                 self.dev_toolbox_window(&ctx, &p, renderer);
                 self.rlva_selftest_window(&ctx, &p);
+                let combat_result = {
+                    if self.combat_window.editor_open() {
+                        let images = self.minimap_ui.editor_images(
+                            &ctx,
+                            &self.world,
+                            &mut self.map_tiles,
+                            &self.settings.maps,
+                            self.settings.maps.tactical.map_view,
+                        );
+                        self.combat_window.map_images(images);
+                    }
+                    self.combat_window.set_exporting(self.map_export.is_some());
+                    let result =
+                        self.combat_window
+                            .show(&ctx, &p, &mut self.settings, &self.world, &self.ui_images, &mut self.panels.combat);
+                    if result.changed {
+                        self.settings.maps.tactical.mark_unsaved();
+                    }
+                    // The Sharing tab shows who is in the active group.
+                    if self.panels.combat && self.combat_window.tab == 6 {
+                        self.world.group_data.ensure_members(self.world.groups.active);
+                    }
+                    result
+                };
+                if let Some(job) = self.combat_window.take_export() {
+                    self.export_marker_map(job);
+                }
+                if let Some((id, volume)) = combat_result.combat_test_sound {
+                    self.scene.sounds.play_ui_gain(self.audio_engine.as_ref(), id, volume);
+                }
+                if let Some(slot) = combat_result.combat_preview
+                    && let Some(&award) = crate::combat::awards::Award::ALL.get(slot)
+                {
+                    self.chat_ui.combat.preview_award(award, Instant::now());
+                    if let Some(asset) = self.settings.combat.announcement_assets.get(slot)
+                        && let Ok(id) = uuid::Uuid::parse_str(asset)
+                        && !id.is_nil()
+                    {
+                        self.scene.sounds.play_ui_gain(
+                            self.audio_engine.as_ref(),
+                            id,
+                            self.settings.combat.voice_volume * self.settings.combat.family_volume[award.family().index()],
+                        );
+                    }
+                }
                 self.about_window(&ctx, &p, renderer);
                 self.sysinfo_window(&ctx, &p, renderer);
                 let region = self.world.region_name();
@@ -20959,6 +21388,23 @@ impl ApplicationHandler for App {
                 self.panels.settings = true;
                 self.panels.perf = false;
                 let value = std::env::var("AURORA_DEMO_OPTIONS").unwrap_or_default();
+                if let Some(page) = value.strip_prefix("combat") {
+                    if page == "/editor" {
+                        self.combat_window.open_editor();
+                    }
+                    if page == "/editor-layers" {
+                        self.combat_window.show_editor_layers();
+                    }
+                    if page == "/editor-map" {
+                        self.combat_window.show_editor_map();
+                    }
+                    if page == "/editor-set" {
+                        self.combat_window.show_editor_set();
+                    }
+                    self.panels.settings = false;
+                    self.panels.combat = !page.starts_with("/editor");
+                    self.combat_window.tab = page.strip_prefix('/').and_then(|s| s.parse::<usize>().ok()).unwrap_or(0).min(7);
+                }
                 // the former Debug page: the Dev Toolbox
                 if value.split(':').next() == Some("9") {
                     self.panels.settings = false;
@@ -23773,6 +24219,7 @@ impl ApplicationHandler for App {
     /// the browsers' private profiles were cleaned up).
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.hide_windows_for_exit();
+        self.chat_ui.combat.journal.flush(&self.chat_ui.combat.history);
         #[cfg(windows)]
         crate::slurl_handoff::release();
         self.gfx = None;
@@ -23847,6 +24294,14 @@ impl ApplicationHandler for App {
             return;
         }
 
+        if self.settings.maps.tactical.session.draw.is_some()
+            && matches!(&event,WindowEvent::KeyboardInput {event:ke,..}
+                if ke.state==ElementState::Pressed && ke.physical_key==PhysicalKey::Code(winit::keyboard::KeyCode::Escape))
+        {
+            self.settings.maps.tactical.session.draw = None;
+            self.settings.maps.tactical.session.drawing_start = None;
+            return;
+        }
         // the digits of a Windows Alt code typed in a text field are kept
         // from it (alt_codes.rs); the character comes at Alt's release
         let pending_alt_chars = self.alt_text.len();
@@ -24024,6 +24479,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Focused(false) => {
+                self.tactical_press = None;
                 self.super_held = false;
                 self.ime_preedit = false;
                 self.options_ui.cancel_joystick_capture();
@@ -24078,6 +24534,10 @@ impl ApplicationHandler for App {
                     let pressed = ke.state == ElementState::Pressed;
                     let mods = self.key_mods(ke);
                     let altgr_text = self.altgr_text_input(ke);
+                    if pressed && code == KeyCode::Escape && self.tactical_press.take().is_some() {
+                        self.mouselook_alt_cursor();
+                        return;
+                    }
                     // The spinning cat watches for its code (crate::oiia):
                     // the keys go on to do what they do.
                     if pressed && !ke.repeat {
@@ -24229,6 +24689,91 @@ impl ApplicationHandler for App {
                     }
                     // Releases always go through so keys never get stuck.
                     let typing = self.egui_ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(&self.egui_ctx);
+                    if self.settings.maps.tactical.session.capture_key && pressed && !ke.repeat && !Input::is_modifier(code) {
+                        self.settings.maps.tactical.session.capture_key = false;
+                        if code != winit::keyboard::KeyCode::Escape {
+                            self.settings.maps.tactical.key = format!("{code:?}");
+                            self.settings.maps.tactical.mark_unsaved();
+                        }
+                        return;
+                    }
+                    if self.in_world()
+                        && self.settings.maps.tactical.pings_enabled
+                        && self.settings.maps.tactical.available()
+                        && input == Input::Key(self.settings.maps.tactical.key.clone())
+                        && ((!typing && !mods.ctrl && !mods.alt && !mods.shift && !self.ui_takes_pointer())
+                            || self.tactical_press.is_some())
+                    {
+                        if pressed && !ke.repeat && self.tactical_press.is_none() {
+                            let point = self.gfx.as_ref().and_then(|g| {
+                                let pixel = if self.camera.mouselook() {
+                                    let s = g.window.inner_size();
+                                    (s.width as f32 * 0.5, s.height as f32 * 0.5)
+                                } else {
+                                    self.cursor_pos
+                                };
+                                let ray = g.renderer.cursor_ray(pixel.0, pixel.1)?;
+                                self.scene.tactical_pick(&self.world, ray, self.settings.draw_distance)
+                            });
+                            let target = self.settings.maps.tactical.session.aimed_ping;
+                            let upgrade = self
+                                .settings
+                                .maps
+                                .tactical
+                                .recent_tap(Instant::now())
+                                .filter(|id| target.is_none_or(|target| target == *id));
+                            let contact = point.is_some_and(|(_, contact)| contact);
+                            {
+                                let point = point.map(|(point, _)| {
+                                    let (x, y) = ui::minimap::to_global(&self.world, point);
+                                    [x, y, point.z as f64]
+                                });
+                                let rect = self.egui_ctx.content_rect();
+                                let center = if self.camera.mouselook() {
+                                    rect.center()
+                                } else {
+                                    let cursor = self.egui_ctx.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center());
+                                    // Leave enough room for all four sectors and the footer.
+                                    egui::pos2(
+                                        cursor.x.clamp(rect.left() + 156.0, (rect.right() - 156.0).max(rect.left() + 156.0)),
+                                        cursor.y.clamp(rect.top() + 148.0, (rect.bottom() - 218.0).max(rect.top() + 148.0)),
+                                    )
+                                };
+                                self.tactical_press = Some(crate::combat::ping_ui::Press {
+                                    since: Instant::now(),
+                                    point,
+                                    center,
+                                    target,
+                                    contact,
+                                    upgrade,
+                                    region: self.world.main_region,
+                                });
+                            }
+                        } else if !pressed && let Some(press) = self.tactical_press.take() {
+                            let kind = if press.wheel(self.settings.maps.tactical.hold_ms) {
+                                crate::combat::tactical::wheel_selection(&self.egui_ctx, press.center)
+                            } else if press.upgrade.is_some() {
+                                self.settings
+                                    .maps
+                                    .tactical
+                                    .tap(press.point, press.contact, press.upgrade, Instant::now());
+                                None
+                            } else if let Some(id) = press.target {
+                                self.settings.maps.tactical.respond(id, Instant::now());
+                                None
+                            } else {
+                                self.settings.maps.tactical.tap(press.point, press.contact, None, Instant::now());
+                                None
+                            };
+                            if let Some(kind) = kind
+                                && let Some(point) = press.point
+                            {
+                                self.settings.maps.tactical.ping(point, kind);
+                            }
+                            self.mouselook_alt_cursor();
+                        }
+                        return;
+                    }
                     use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
                     let gesture_key = crate::gestures::keys::from_key(code, &ke.key_without_modifiers());
                     if !pressed && let Some(key) = gesture_key {
@@ -24376,6 +24921,18 @@ impl ApplicationHandler for App {
                 if *state == ElementState::Pressed && self.busy_pause.paused() {
                     self.busy_pause.demo_released = true;
                 }
+                if *state == ElementState::Pressed
+                    && self
+                        .tactical_press
+                        .is_some_and(|press| press.wheel(self.settings.maps.tactical.hold_ms))
+                {
+                    if *button == MouseButton::Right && *state == ElementState::Pressed {
+                        self.tactical_press = None;
+                        self.mouselook_alt_cursor();
+                    }
+                    // Do not fire, grab or start a camera drag through the wheel.
+                    return;
+                }
                 if *button == MouseButton::Left {
                     self.alt_cursor.left_button(*state == ElementState::Pressed);
                 }
@@ -24410,6 +24967,12 @@ impl ApplicationHandler for App {
                 self.mouse_input(*button, pressed, over_ui);
             }
             WindowEvent::MouseWheel { delta, .. } if !self.exit_prompt.open && !self.ui_takes_pointer() && self.in_world() => {
+                if self
+                    .tactical_press
+                    .is_some_and(|press| press.wheel(self.settings.maps.tactical.hold_ms))
+                {
+                    return;
+                }
                 let steps = match delta {
                     MouseScrollDelta::LineDelta(_, y) => *y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
