@@ -202,7 +202,7 @@ fn residents(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Conte
         });
         muted(ui, p, tr!("allies-residents-help"));
         ui.add_space(6.0);
-        widgets::search_field(ui, &mut view.search, tr!("sharing-search"), 220.0);
+        widgets::search_field(ui, p, &mut view.search, tr!("sharing-search"), 220.0);
         ui.add_space(6.0);
         let query = view.search.to_lowercase();
         let list: Vec<Entry> = entries(cfg, context)

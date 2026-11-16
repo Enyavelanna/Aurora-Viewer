@@ -10,6 +10,8 @@ mod app;
 mod atomic_file;
 mod autopilot;
 mod autoreplace;
+mod avatar_align;
+mod avatar_studio;
 mod blender_live;
 // Bug report form, disabled for now: "Report a bug" (login screen, top bar,
 // crash window) opens GitHub's issue chooser in the browser instead
@@ -33,7 +35,9 @@ mod credentials;
 mod cursors;
 mod deep_profile;
 mod demo;
+mod destination_guide;
 mod dev_toolbox;
+mod director;
 mod disk_io;
 mod dof;
 mod external_url;
@@ -70,17 +74,22 @@ mod login_wait;
 mod lsl_keywords;
 #[cfg(target_os = "macos")]
 mod mac_quit;
+#[cfg(target_os = "macos")]
+mod mac_window_menu;
 mod machine_id;
 mod media;
 mod movement;
 mod natural_order;
 mod net_adapters;
 mod net_profile;
+mod oiia;
+mod omnifilter;
 mod open_path;
 mod overlay_hooks;
 mod own_motion;
 mod physics_editor;
 mod raw_mouse;
+mod recorder;
 mod report_abuse;
 mod scene;
 mod screen_rate;
@@ -91,6 +100,7 @@ mod slurl;
 mod slurl_handoff;
 mod snapshot;
 mod spelling;
+mod splash;
 mod stream_title;
 mod sys_probe;
 mod system_info;
@@ -105,6 +115,9 @@ mod updater;
 mod url_scheme;
 mod voice;
 mod wearable_editor;
+mod weather;
+#[cfg(any(windows, test))]
+mod wide_chars;
 mod window_hold;
 mod window_show;
 mod world;
@@ -134,7 +147,16 @@ fn main() -> anyhow::Result<()> {
     let vulkan_layers_off = unsafe { aurora_render::vulkan_layers::disable(allow_overlays) };
     // SAFETY: as above, no other thread yet.
     let dozen_off = unsafe { aurora_render::vulkan_drivers::disable() };
-    if aurora_updater::install::run_helper()? {
+    // the switch to a new version shows the startup splash's window
+    // throughout (splash/), handed to the new viewer's own splash
+    let mut update_window = splash::UpdateWindow::default();
+    if aurora_updater::install::run_helper(&mut |version, stage| update_window.stage(version, stage))? {
+        return Ok(());
+    }
+    drop(update_window);
+    // a window and nothing else: before the checks of an isolated update
+    // test, as the update helper runs it from outside the test installation
+    if splash::helper()? {
         return Ok(());
     }
     cli::get();
@@ -162,9 +184,12 @@ fn main() -> anyhow::Result<()> {
     {
         return Ok(());
     }
+    // on screen at once, while the renderer prepares (splash/)
+    splash::start();
     aurora_i18n::select("default", cli::get().language.as_deref());
     crash::start();
     logging::init();
+    splash::settings();
     // The loader scans the layer manifests (and may call their pre-instance
     // hooks): on a thread of its own, like the crash report's list of layers
     // (crash/mod.rs), so the window never waits for this log line
@@ -282,11 +307,15 @@ fn run_viewer() -> anyhow::Result<()> {
         .build_global();
 
     let mut event_loop = winit::event_loop::EventLoop::builder();
-    // the absolute positions of remote desktops made motions (raw_mouse.rs)
+    // the absolute positions of remote desktops made motions (raw_mouse.rs),
+    // and their emoji typed as two halves were lost (wide_chars.rs)
     #[cfg(windows)]
     raw_mouse::install(&mut event_loop);
     let event_loop = event_loop.build()?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+    // the cache clear an update could not do while the cache was held
+    // (aurora-updater user_data.rs), before anything opens it
+    aurora_updater::clear_deferred_cache();
     // the cache folder of this run, before anything uses it
     cache_location::init();
     // private browser profiles a crash left behind (search web tab)
