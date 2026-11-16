@@ -23,6 +23,8 @@ use uuid::Uuid;
 #[derive(Default)]
 pub(crate) struct View {
     search: String,
+    /// "Remove all ticked allies" was pressed: its confirmation is open.
+    confirm_clear: bool,
 }
 
 /// One resident of the list.
@@ -179,6 +181,31 @@ fn entries(cfg: &Settings, context: &Context) -> Vec<Entry> {
     out
 }
 
+/// The question before the ticked allies go, then their removal, with an
+/// undo: allies who are away can only be ticked again once they are in
+/// range. True when they were removed.
+fn confirm_clear(ctx: &egui::Context, p: &Palette, cfg: &mut Settings, context: &Context, view: &mut View) -> bool {
+    let ticked: Vec<Uuid> = cfg.recipients.iter().filter(|(_, on)| **on).map(|(id, _)| *id).collect();
+    let away = ticked.iter().filter(|id| !context.nearby.iter().any(|n| n.id == **id)).count();
+    let body = if away > 0 {
+        tr!("allies-clear-confirm-away", away = away)
+    } else {
+        String::new()
+    };
+    let title = tr!("allies-clear-confirm-title", count = ticked.len());
+    let answer = super::combat_cards::confirm(ctx, p, "allies-clear", &title, &body, "user-minus", tr!("allies-clear-confirm"));
+    let Some(yes) = answer else { return false };
+    view.confirm_clear = false;
+    if !yes || ticked.is_empty() {
+        return false;
+    }
+    let text = tr!("combat-undo-allies", count = ticked.len());
+    let step = crate::combat::undo::Undo::tactical(cfg, text, std::time::Instant::now());
+    crate::combat::undo::record(cfg, step);
+    cfg.recipients.clear();
+    true
+}
+
 /// True when a resident was ticked or a title allied.
 fn residents(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Context, view: &mut View) -> bool {
     let mut changed = false;
@@ -189,9 +216,11 @@ fn residents(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Conte
             title(ui, p, "users", tr!("allies-residents"), Some(ticked));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if widgets::icon_button(ui, p, "user-minus", tr!("allies-clear"), ticked > 0) {
-                    cfg.recipients.clear();
-                    changed = true;
+                    view.confirm_clear = true;
                 }
+                // apart, so that adding everyone around is not a slip away
+                // from removing everyone
+                ui.add_space(18.0);
                 if widgets::icon_button(ui, p, "user-plus", tr!("allies-add-nearby"), !context.nearby.is_empty()) {
                     for n in &context.nearby {
                         cfg.recipients.insert(n.id, true);
@@ -200,6 +229,9 @@ fn residents(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings, context: &Conte
                 }
             });
         });
+        if view.confirm_clear {
+            changed |= confirm_clear(ui.ctx(), p, cfg, context, view);
+        }
         muted(ui, p, tr!("allies-residents-help"));
         ui.add_space(6.0);
         widgets::search_field(ui, p, &mut view.search, tr!("sharing-search"), 220.0);

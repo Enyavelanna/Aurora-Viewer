@@ -15067,6 +15067,35 @@ sharing-inbox-empty = Nothing received yet.
 sharing-inbox-line = From { $sender } · { $count } markers · { $shapes }
 sharing-dismiss = Dismiss
 combat-card-reset = Reset this card to its defaults
+combat-undo-reset = { $card } reset
+combat-undo-colours = { $count ->
+    [one] { $count } avatar colour removed
+   *[other] { $count } avatar colours removed
+    }
+combat-reset-colours-tip = { $count ->
+    [one] Remove the avatar colour
+   *[other] Remove all { $count } avatar colours
+    }
+combat-undo-allies = { $count ->
+    [one] { $count } ally removed
+   *[other] { $count } allies removed
+    }
+combat-undo-set = Set “{ $name }” removed
+allies-clear-confirm-title = { $count ->
+    [one] Remove { $count } ally?
+   *[other] Remove { $count } allies?
+    }
+allies-clear-confirm-away = { $away ->
+    [one] { $away } of them is not nearby. You can only ally them again once they are in range.
+   *[other] { $away } of them are not nearby. You can only ally them again once they are in range.
+    }
+allies-clear-confirm = Remove allies
+tactical-remove-set-title = Remove the set “{ $name }”?
+tactical-remove-set-body = { $count ->
+    [one] Its marker and its layers go with it.
+   *[other] Its { $count } markers and its layers go with it.
+    }
+tactical-remove-set = Remove set
 combat-off-notice = Combat mode is off: nothing below is active.
 combat-overview-count = { $count } of { $total } features on
 combat-overview-tactical = Tactical tools

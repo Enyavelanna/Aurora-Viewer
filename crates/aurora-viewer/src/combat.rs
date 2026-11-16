@@ -16,6 +16,7 @@ pub(crate) mod sets;
 pub(crate) mod tactical;
 pub(crate) mod transfer;
 pub(crate) mod ui;
+pub(crate) mod undo;
 pub(crate) mod wire;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

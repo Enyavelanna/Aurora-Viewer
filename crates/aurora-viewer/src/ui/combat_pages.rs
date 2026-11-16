@@ -3,8 +3,10 @@
 //! live in this window and nowhere else.
 use super::combat_cards::{Card, color_row, columns, field_row, gap, muted, notice, section, slider_row, switch_row, text_row, under};
 use super::options::{OptionsResult, OptionsUi};
+use crate::combat::undo::{self, Undo};
 use crate::{combat::tactical::Settings as Tactical, settings::Settings, theme::Palette};
 use aurora_i18n::tr;
+use std::time::Instant;
 
 /// One tab. True when a setting changed.
 pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, r: &mut OptionsResult, tab: usize) -> bool {
@@ -34,6 +36,18 @@ pub(crate) fn show(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut Op
         };
     });
     changed
+}
+
+/// A card's Combat settings are about to go back to their defaults: keep
+/// them for "Undo".
+fn before_combat(t: &mut Tactical, c: &crate::combat::Settings, card: &str) {
+    undo::record(t, Undo::combat(c, tr!("combat-undo-reset", card = card.to_owned()), Instant::now()));
+}
+
+/// The same for a card of the mini-map tools.
+fn before_tactical(t: &mut Tactical, card: &str) {
+    let step = Undo::tactical(t, tr!("combat-undo-reset", card = card.to_owned()), Instant::now());
+    undo::record(t, step);
 }
 
 /// The mini-map tools can work: Combat mode and their own switch.
@@ -117,6 +131,7 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                     **changed |= switch_row(ui, p, &mut c.show_tab, tr!("combat-show-tab"), "");
                 })
             {
+                before_combat(&mut s.maps.tactical, c, tr!("combat-journal-title"));
                 (c.journal, c.show_tab) = (dc.journal, dc.show_tab);
                 **changed = true;
             }
@@ -128,6 +143,7 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                     **changed |= slider_row(ui, tr!("combat-zoom-sensitivity"), "", &mut c.zoom_sensitivity, 0.0..=1.0, "");
                 })
             {
+                before_combat(&mut s.maps.tactical, c, tr!("combat-zoom-sensitivity"));
                 c.zoom_sensitivity = dc.zoom_sensitivity;
                 **changed = true;
             }
@@ -147,6 +163,7 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                     });
                 })
             {
+                before_combat(&mut s.maps.tactical, c, tr!("combat-killmarker"));
                 (c.killmarker, c.marker_size, c.marker_seconds, c.marker_opacity, c.marker_color) = marker_default;
                 **changed = true;
             }
@@ -166,6 +183,7 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                     });
                 })
             {
+                before_combat(&mut s.maps.tactical, c, tr!("combat-kill-sound"));
                 (c.kill_sound, c.kill_asset, c.kill_volume) = (dc.kill_sound, dc.kill_asset.clone(), dc.kill_volume);
                 **changed = true;
             }
@@ -218,6 +236,7 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
                     });
                 })
             {
+                before_combat(&mut s.maps.tactical, c, tr!("combat-feed"));
                 (c.feed, c.feed_size, c.feed_opacity, c.feed_seconds, c.feed_entries) =
                     (dc.feed, dc.feed_size, dc.feed_opacity, dc.feed_seconds, dc.feed_entries);
                 (c.feed_position, c.feed_medals, c.feed_style, c.feed_filter) =
@@ -246,6 +265,7 @@ fn awards(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, 
             changed |= switch_row(ui, p, &mut c.medals, tr!("combat-medals"), "");
         })
     {
+        before_combat(&mut s.maps.tactical, c, tr!("combat-rewards"));
         (c.voices, c.medals, c.voice_volume) = (d.voices, d.medals, d.voice_volume);
         changed = true;
     }
@@ -265,6 +285,7 @@ fn awards(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, 
             changed |= switch_row(ui, p, &mut c.banner_calm, tr!("combat-banner-calm"), tr!("combat-banner-calm-help"));
         })
     {
+        before_combat(&mut s.maps.tactical, c, tr!("combat-banner-title"));
         (c.chips, c.banner_scale, c.banner_seconds, c.banner_top, c.banner_calm) = banner_default;
         changed = true;
     }
@@ -294,6 +315,7 @@ fn minimap(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi,
                         });
                     })
                 {
+                    before_tactical(t, tr!("tactical-title"));
                     (t.tools_enabled, t.fixed_center, t.rotate_avatar) = (dt.tools_enabled, dt.fixed_center, dt.rotate_avatar);
                     **changed = true;
                 }
@@ -322,6 +344,7 @@ fn minimap(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi,
                         });
                     })
                 {
+                    before_tactical(t, tr!("tactical-dots-title"));
                     (t.dots_enabled, t.dot_scale, t.outline_width, t.outline) = dots_default;
                     **changed = true;
                 }
@@ -334,12 +357,19 @@ fn minimap(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi,
             let colours = badge_text > 0;
             let card = Card::new("palette-filled", tr!("tactical-colors-title"))
                 .help(tr!("tactical-colors-note"))
-                .modified(colours);
+                .modified(colours)
+                .reset_tip(tr!("combat-reset-colours-tip", count = badge_text as i64));
             let card = if badge_text > 0 { card.badge(badge_text.to_string()) } else { card };
             ui.add_enabled_ui(!off, |ui| {
                 if card.show(ui, p, |ui| {
                     **changed |= crate::combat::tactical::avatar_colors(ui, p, &st.tactical_context, &mut s.maps.tactical);
                 }) {
+                    let undo = Undo::tactical(
+                        &s.maps.tactical,
+                        tr!("combat-undo-colours", count = badge_text as i64),
+                        Instant::now(),
+                    );
+                    undo::record(&mut s.maps.tactical, undo);
                     s.maps.tactical.player_colors.clear();
                     s.maps.tactical.group_colors.clear();
                     s.maps.tactical.title_colors.clear();
@@ -372,6 +402,7 @@ fn marker_sets(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut Option
                         **changed |= crate::combat::tactical::marker_display(ui, p, t);
                     })
                 {
+                    before_tactical(t, tr!("tactical-on-map"));
                     (t.enabled, t.labels, t.size) = (d.enabled, d.labels, d.size);
                     **changed = true;
                 }
@@ -443,6 +474,7 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                         });
                     })
                 {
+                    before_tactical(t, tr!("ping-group-placing"));
                     (t.pings_enabled, t.key, t.hold_ms, t.seconds) = (dt.pings_enabled, dt.key.clone(), dt.hold_ms, dt.seconds);
                     **changed = true;
                 }
@@ -460,6 +492,7 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                         **changed |= switch_row(ui, p, &mut t.aim_fade, tr!("ping-aim-fade"), "");
                     })
                 {
+                    before_tactical(t, tr!("ping-group-aiming"));
                     (t.auto_contact, t.double_tap, t.aim_fade) = (dt.auto_contact, dt.double_tap, dt.aim_fade);
                     **changed = true;
                 }
@@ -477,6 +510,7 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                         **changed |= switch_row(ui, p, &mut t.distances, tr!("tactical-distances"), "");
                     })
                 {
+                    before_tactical(t, tr!("ping-group-screen"));
                     (t.offscreen_pings, t.distances) = (dt.offscreen_pings, dt.distances);
                     **changed = true;
                 }
@@ -497,6 +531,7 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                         }
                     })
                 {
+                    before_tactical(t, tr!("ping-group-kinds"));
                     (t.colors, t.icons) = (dt.colors, dt.icons.clone());
                     **changed = true;
                 }
@@ -513,6 +548,7 @@ fn pings(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, st: &mut OptionsUi, d
                         });
                     })
                 {
+                    before_tactical(t, tr!("ping-group-sound"));
                     (t.ping_sound, t.sound_asset, t.sound_volume) = (dt.ping_sound, dt.sound_asset.clone(), dt.sound_volume);
                     **changed = true;
                 }

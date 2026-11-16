@@ -55,6 +55,10 @@ impl CombatWindow {
     ) -> options::OptionsResult {
         let mut result = options::OptionsResult::default();
         if !*open {
+            // the windows that show "Undo" are closed: the removal is final
+            if !self.editor.open {
+                settings.maps.tactical.session.undo = None;
+            }
             self.editor.show(ctx, p, &mut settings.maps.tactical, world);
             return result;
         }
@@ -121,6 +125,14 @@ impl CombatWindow {
                         }
                     });
                 });
+                let now = std::time::Instant::now();
+                let text = crate::combat::undo::current(&mut settings.maps.tactical, now).map(|u| u.text.clone());
+                if let Some(text) = text
+                    && super::combat_cards::undo_strip(ui, p, ui.max_rect(), &text)
+                    && let Some(step) = settings.maps.tactical.session.undo.take()
+                {
+                    result.changed |= step.restore(Some(&mut settings.combat), &mut settings.maps.tactical);
+                }
             });
         self.editor.show(ctx, p, &mut settings.maps.tactical, world);
         result

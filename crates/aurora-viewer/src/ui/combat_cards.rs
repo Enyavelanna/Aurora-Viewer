@@ -18,6 +18,7 @@ pub(crate) struct Card<'a> {
     badge: Option<String>,
     help: &'a str,
     modified: bool,
+    reset_tip: Option<String>,
 }
 
 impl<'a> Card<'a> {
@@ -28,6 +29,7 @@ impl<'a> Card<'a> {
             badge: None,
             help: "",
             modified: false,
+            reset_tip: None,
         }
     }
     pub fn badge(mut self, text: impl Into<String>) -> Self {
@@ -42,6 +44,12 @@ impl<'a> Card<'a> {
     /// Something here differs from the default: the reset button shows.
     pub fn modified(mut self, yes: bool) -> Self {
         self.modified = yes;
+        self
+    }
+    /// The reset button's tooltip, when it removes more than a few values
+    /// (the avatar colours of everyone): it says what goes.
+    pub fn reset_tip(mut self, text: impl Into<String>) -> Self {
+        self.reset_tip = Some(text.into());
         self
     }
     /// Draws the card; true when its reset button was pressed (the page
@@ -60,7 +68,8 @@ impl<'a> Card<'a> {
                 }
                 if self.modified {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        reset = widgets::icon_button(ui, p, "restore", aurora_i18n::tr!("combat-card-reset"), true);
+                        let tip = self.reset_tip.as_deref().unwrap_or(aurora_i18n::tr!("combat-card-reset"));
+                        reset = widgets::icon_button(ui, p, "restore", tip, true);
                     });
                 }
             });
@@ -72,6 +81,68 @@ impl<'a> Card<'a> {
         });
         reset
     }
+}
+
+/// The bar of the last removal, at the bottom of `area`, with its "Undo".
+/// It looks like the undo of a reset in Preferences (`options::undo_bar`).
+/// True when "Undo" was pressed.
+pub(crate) fn undo_strip(ui: &mut egui::Ui, p: &Palette, area: egui::Rect, text: &str) -> bool {
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), egui::FontId::proportional(12.5), p.ink);
+    let w = (galley.size().x + 130.0).min(area.width() - 40.0);
+    let bar = egui::Rect::from_center_size(egui::pos2(area.center().x, area.bottom() - 30.0), vec2(w, 36.0));
+    ui.painter().rect_filled(bar, ui.visuals().window_corner_radius, p.raised);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(bar.shrink2(vec2(14.0, 0.0)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    child.label(RichText::new(text).size(12.5).color(p.ink));
+    let mut undo = false;
+    child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let label = RichText::new(aurora_i18n::tr!("money-tracker-undo"))
+            .size(12.5)
+            .strong()
+            .color(p.violet_pale);
+        undo = ui
+            .add(egui::Label::new(label).sense(egui::Sense::click()))
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked();
+    });
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+    undo
+}
+
+/// The question before a removal that is hard to rebuild: Some(true) to go
+/// ahead, Some(false) for Cancel, Esc or a click outside, None while it is
+/// open. It looks like the confirmation of a reset in Preferences
+/// (`options::reset_modal`); the undo still follows the removal.
+pub(crate) fn confirm(ctx: &egui::Context, p: &Palette, id: &str, title: &str, body: &str, icon: &str, ok: &str) -> Option<bool> {
+    let mut answer = None;
+    let modal = widgets::Modal::new(egui::Id::unique(("combat-confirm", id))).show(ctx, |ui| {
+        ui.set_width(360.0);
+        ui.label(RichText::new(title).size(15.0).strong().color(p.ink));
+        if !body.is_empty() {
+            ui.add_space(6.0);
+            ui.label(RichText::new(body).size(12.5).color(p.muted));
+        }
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            let size = vec2(0.0, 26.0);
+            if widgets::action_button(ui, p, icon, ok, widgets::ActionKind::Danger, size).clicked() {
+                answer = Some(true);
+            }
+            let cancel = aurora_i18n::tr!("common-cancel");
+            if widgets::action_button(ui, p, "x", cancel, widgets::ActionKind::Flat, size).clicked() {
+                answer = Some(false);
+            }
+        });
+    });
+    if modal.should_close() && answer.is_none() {
+        answer = Some(false);
+    }
+    answer
 }
 
 pub(crate) fn muted(ui: &mut egui::Ui, p: &Palette, text: &str) {

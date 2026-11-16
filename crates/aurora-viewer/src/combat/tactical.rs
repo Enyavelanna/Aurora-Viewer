@@ -191,6 +191,10 @@ pub(crate) struct Session {
     pub draw: Option<Shape>,
     pub drawing_start: Option<[f64; 3]>,
     pub capture_key: bool,
+    /// The last removal of the Combat window, while it can be undone.
+    pub undo: Option<super::undo::Undo>,
+    /// "Remove" was pressed on a set with markers: its confirmation is open.
+    pub confirm_remove_set: bool,
     /// A saved Combat setting changed since the settings file was last
     /// written: the once-a-second tick of the frame saves and clears it. Set
     /// by the Combat window's tabs, the library (`store_set`, `import_set`,
@@ -1571,6 +1575,7 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
     if let Some(set) = region.sets.iter_mut().find(|s| Some(s.id) == region.active) {
         changed |= ui.text_edit_singleline(&mut set.name).changed();
     }
+    let mut remove = false;
     ui.horizontal_wrapped(|ui| {
         let size = egui::vec2(0.0, 26.0);
         let flat = widgets::ActionKind::Flat;
@@ -1585,14 +1590,49 @@ pub(crate) fn sets_panel(ui: &mut egui::Ui, p: &Palette, cfg: &mut Settings) {
             changed = true;
         }
         if widgets::action_button(ui, p, "trash-filled", tr!("tactical-remove"), widgets::ActionKind::Danger, size).clicked() {
-            region.remove_active();
-            changed = true;
+            remove = true;
         }
         if widgets::action_button(ui, p, "device-floppy-filled", tr!("tactical-set-save"), flat, size).clicked() {
             changed |= region.save(&cfg.markers);
             changed |= region.save_layers(&cfg.layers);
         }
     });
+    // "Remove" asks first when the set holds markers (an empty one goes at
+    // once); the removal can be undone either way
+    let (name, count) = region
+        .selected()
+        .map(|set| (set.name.clone(), set.markers.len()))
+        .unwrap_or_default();
+    if remove {
+        if count > 0 {
+            cfg.session.confirm_remove_set = true;
+            remove = false;
+        }
+    } else if cfg.session.confirm_remove_set {
+        let title = tr!("tactical-remove-set-title", name = name.as_str());
+        let body = tr!("tactical-remove-set-body", count = count);
+        let answer = crate::ui::combat_cards::confirm(
+            ui.ctx(),
+            p,
+            "tactical-remove-set",
+            &title,
+            &body,
+            "trash-filled",
+            tr!("tactical-remove-set"),
+        );
+        if let Some(yes) = answer {
+            cfg.session.confirm_remove_set = false;
+            remove = yes;
+        }
+    }
+    if remove {
+        let text = tr!("combat-undo-set", name = name.as_str());
+        let step = super::undo::Undo::tactical(cfg, text, std::time::Instant::now());
+        super::undo::record(cfg, step);
+        cfg.library.region_mut(&key, &cfg.current_region_name).remove_active();
+        changed = true;
+    }
+    let region = cfg.library.region_mut(&key, &cfg.current_region_name);
     if region.active != previous {
         let set = region.selected().cloned();
         cfg.adopt(set.as_ref());

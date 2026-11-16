@@ -512,6 +512,19 @@ impl Editor {
         )
         .show(ctx, p, &mut open, |ui| {
             skip_history = self.body(ui, p, cfg, world);
+            // a set removed here can be undone here; a card reset of the
+            // Combat window, which needs its settings, only there
+            let now = std::time::Instant::now();
+            let text = crate::combat::undo::current(cfg, now)
+                .filter(|u| !u.needs_combat())
+                .map(|u| u.text.clone());
+            if let Some(text) = text
+                && super::combat_cards::undo_strip(ui, p, ui.max_rect(), &text)
+                && let Some(step) = cfg.session.undo.take()
+            {
+                step.restore(None, cfg);
+                skip_history = true;
+            }
         });
         let now = ctx.input(|i| i.time);
         if !skip_history && (cfg.markers != before.markers || cfg.layers != before.layers) {

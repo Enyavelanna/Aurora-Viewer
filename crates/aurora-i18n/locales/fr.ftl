@@ -15076,6 +15076,35 @@ sharing-inbox-empty = Rien reçu pour l’instant.
 sharing-inbox-line = De { $sender } · { $count } marqueurs · { $shapes }
 sharing-dismiss = Ignorer
 combat-card-reset = Remettre cette carte par défaut
+combat-undo-reset = Carte « { $card } » remise par défaut
+combat-undo-colours = { $count ->
+    [one] { $count } couleur d’avatar supprimée
+   *[other] { $count } couleurs d’avatar supprimées
+    }
+combat-reset-colours-tip = { $count ->
+    [one] Supprimer la couleur d’avatar
+   *[other] Supprimer les { $count } couleurs d’avatar
+    }
+combat-undo-allies = { $count ->
+    [one] { $count } allié retiré
+   *[other] { $count } alliés retirés
+    }
+combat-undo-set = Ensemble « { $name } » supprimé
+allies-clear-confirm-title = { $count ->
+    [one] Retirer { $count } allié ?
+   *[other] Retirer { $count } alliés ?
+    }
+allies-clear-confirm-away = { $away ->
+    [one] { $away } d’entre eux n’est pas à proximité. Vous ne pourrez le réallier qu’une fois à portée.
+   *[other] { $away } d’entre eux ne sont pas à proximité. Vous ne pourrez les réallier qu’une fois à portée.
+    }
+allies-clear-confirm = Retirer les alliés
+tactical-remove-set-title = Supprimer l’ensemble « { $name } » ?
+tactical-remove-set-body = { $count ->
+    [one] Son marqueur et ses calques sont supprimés avec lui.
+   *[other] Ses { $count } marqueurs et ses calques sont supprimés avec lui.
+    }
+tactical-remove-set = Supprimer l’ensemble
 combat-off-notice = Le mode combat est désactivé : rien ci-dessous n’est actif.
 combat-overview-count = { $count } fonctions sur { $total } activées
 combat-overview-tactical = Outils tactiques
