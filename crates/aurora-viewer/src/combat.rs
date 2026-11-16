@@ -124,24 +124,9 @@ impl Default for Settings {
             medals: false,
             voice_volume: 0.7,
             announcement_assets: vec![String::new(); awards::Award::ALL.len()],
-            // The default medal images.
-            // The order is Award::ALL, so every sound row has a matching image row.
-            medal_textures: [
-                "68165772-e609-2897-5ae9-02eae412fa17", // Double
-                "b9bd132a-4a61-d794-33ce-7036a43ece8c", // Triple
-                "",                                     // Quad
-                "3cd81a7b-8397-5360-9e74-a720e8e18176", // Penta
-                "643173ea-daa2-82c2-1b16-365bfb961c8a", // 10
-                "",                                     // 20
-                "a5316d97-14fe-91a6-0580-b99279a08ddb", // 30
-                "",                                     // 50
-                "9a33124d-8c5b-7cf4-934b-1d96fadcf3bd", // Revenge
-                "2cc4115f-dcb0-0206-106d-274129539dab", // Domination
-                "",                                     // Shutdown
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
+            // No image until the person gives one: a medal shows its icon. The
+            // order is Award::ALL, so every sound row has a matching image row.
+            medal_textures: vec![String::new(); awards::Award::ALL.len()],
             medal_names: vec![String::new(); awards::Award::ALL.len()],
             medal_enabled: vec![true; awards::Award::ALL.len()],
             family_on: [true; 3],
