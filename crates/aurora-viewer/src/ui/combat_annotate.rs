@@ -244,6 +244,12 @@ fn contrast(c: Color32) -> Color32 {
     }
 }
 
+/// The colour of a marker's name: the interface's default ink, light, under
+/// the halo of `halo_text`. A name in its marker's own colour sat on that
+/// marker's fill and could not be read (a red name on a red zone: 1.3:1).
+/// A text marker keeps its colour: there the words are the marker.
+pub(crate) const NAME_INK: [u8; 3] = [232, 237, 251];
+
 /// Text with a dark halo, readable on any map.
 pub(crate) fn halo_text(painter: &Painter, pos: Pos2, align: egui::Align2, text: &str, size: f32, color: Color32) {
     let font = egui::FontId::proportional(size);
@@ -479,8 +485,56 @@ pub(crate) fn paint(painter: &Painter, proj: &dyn Project, m: &Marker, look: &Lo
         && !m.name.is_empty()
         && let Some((pos, align)) = label_spot(proj, m, look.point_size)
     {
-        halo_text(painter, pos, align, &m.name, m.style.text_size, c);
+        let [r, g, b] = NAME_INK;
+        let ink = with_alpha(Color32::from_rgb(r, g, b), look.alpha);
+        halo_text(painter, pos, align, &m.name, m.style.text_size, ink);
     }
+}
+
+/// The room the words of a marker take on the map: its name where it is
+/// drawn, or the words of a text. None when it shows none. An estimate,
+/// like the one that picks a name (`label_hit`).
+pub(crate) fn words_box(proj: &dyn Project, m: &Marker, point_size: f32) -> Option<Rect> {
+    if m.name.is_empty() {
+        return None;
+    }
+    if m.shape() == Shape::Text {
+        let at = proj.at(m.position[0], m.position[1]);
+        return Some(text_box(at, egui::Align2::CENTER_CENTER, &m.name, m.style.text_size));
+    }
+    if !m.style.label {
+        return None;
+    }
+    let (pos, align) = label_spot(proj, m, point_size)?;
+    Some(text_box(pos, align, &m.name, m.style.text_size))
+}
+
+/// Which names a crowded map shows, in the order given (the first keeps its
+/// place): a name that would land on a text or on a name already shown is
+/// left out. The texts always show. One answer per marker; true for a
+/// marker with no name to hide.
+pub(crate) fn names_shown<'a>(proj: &dyn Project, markers: impl Iterator<Item = &'a Marker> + Clone, point_size: f32) -> Vec<bool> {
+    let mut taken: Vec<Rect> = markers
+        .clone()
+        .filter(|m| m.shape() == Shape::Text)
+        .filter_map(|m| words_box(proj, m, point_size))
+        .collect();
+    markers
+        .map(|m| {
+            if m.shape() == Shape::Text {
+                return true;
+            }
+            let Some(room) = words_box(proj, m, point_size) else {
+                return true;
+            };
+            if taken.iter().any(|t| t.intersects(room)) {
+                false
+            } else {
+                taken.push(room);
+                true
+            }
+        })
+        .collect()
 }
 
 // ---- picking ---------------------------------------------------------------
@@ -781,6 +835,50 @@ mod tests {
         route.path = vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 0.0]];
         assert_eq!(handles(&proj, &route).len(), 5, "three vertices and two edges");
         assert!(handles(&proj, &marker(Shape::Pin)).is_empty());
+    }
+
+    #[test]
+    fn a_crowded_map_keeps_the_texts_and_the_first_name_and_leaves_out_the_one_under_them() {
+        let proj = Flat(1.0);
+        let named = |name: &str, x: f64, y: f64| {
+            let mut m = marker(Shape::Circle);
+            m.radius = 10.0;
+            m.position = [x, y, 0.0];
+            m.name = name.into();
+            m
+        };
+        let mut text = marker(Shape::Text);
+        text.name = "MID".into();
+        let silent = marker(Shape::Circle);
+        let mut muted = named("Hidden by its own switch", 0.0, 0.0);
+        muted.style.label = false;
+        // under the text, apart, on the one apart, a zone with no name, a
+        // name turned off, then the text itself, drawn last
+        let markers = [
+            named("Bridge", 0.0, 0.0),
+            named("Yard", 200.0, 0.0),
+            named("Cover", 204.0, 2.0),
+            silent,
+            muted,
+            text,
+        ];
+        let shown = names_shown(&proj, markers.iter(), 8.0);
+        assert_eq!(shown, [false, true, false, true, true, true]);
+        // the same names far enough apart all show
+        let spread = [named("Bridge", 0.0, 100.0), named("Yard", 200.0, 0.0), named("Cover", 400.0, 0.0)];
+        assert_eq!(names_shown(&proj, spread.iter(), 8.0), [true, true, true]);
+    }
+
+    #[test]
+    fn a_name_is_light_whatever_the_colour_of_its_marker() {
+        // WCAG relative luminance: the ink against the black of the halo
+        let f = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        let [r, g, b] = NAME_INK;
+        let ink = 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+        assert!((ink + 0.05) / 0.05 >= 4.5, "the name on its halo");
     }
 
     #[test]

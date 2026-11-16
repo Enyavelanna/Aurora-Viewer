@@ -269,7 +269,8 @@ fn marker(out: &mut String, f: &Frame, m: &Marker, n: usize) {
             anchor,
             baseline,
             f64::from(m.style.text_size) * u,
-            &rgb(m.color),
+            // light under its halo, as on the map (`annotate::NAME_INK`)
+            &rgb([geom::NAME_INK[0], geom::NAME_INK[1], geom::NAME_INK[2], 255]),
             false,
             &m.name,
         );

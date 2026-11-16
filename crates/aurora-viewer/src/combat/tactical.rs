@@ -1168,8 +1168,12 @@ impl Settings {
             return;
         }
         if self.enabled {
-            for marker in self.draw_order() {
-                self.paint_map(painter, view, marker);
+            // the mini-map is small: a name that would land on another is
+            // left out, the first drawn keeps its place
+            let order = self.draw_order();
+            let shown = crate::ui::combat_annotate::names_shown(view, order.iter().copied(), self.size);
+            for (marker, named) in order.into_iter().zip(shown) {
+                self.paint_named(painter, view, marker, named);
             }
         }
         if self.pings_enabled {
@@ -1191,12 +1195,16 @@ impl Settings {
         }
     }
     pub fn paint_map(&self, painter: &egui::Painter, view: &View, m: &Marker) {
+        self.paint_named(painter, view, m, true);
+    }
+    /// A marker on the mini-map; `named` false leaves its name out.
+    fn paint_named(&self, painter: &egui::Painter, view: &View, m: &Marker, named: bool) {
         crate::ui::combat_annotate::paint(
             painter,
             view,
             m,
             &crate::ui::combat_annotate::Look {
-                labels: self.labels,
+                labels: self.labels && named,
                 point_size: self.size,
                 ..Default::default()
             },
@@ -1227,6 +1235,8 @@ pub(crate) fn demo_callouts(at: [f64; 2], z: f64) -> Vec<Marker> {
         pt(-8.0, 12.0),
         pt(-40.0, 8.0),
     ];
+    // under the "MID" callout, not on it
+    bridge.style.label_dy = -12.0;
     bridge.position = bridge.path[0];
     bridge.style.fill = 28;
     bridge.style.dash = Dash::Dashed;
