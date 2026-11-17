@@ -3755,6 +3755,7 @@ pub fn show(
                         None,
                         0.0,
                         false,
+                        egui::Vec2::ZERO,
                     )
                     .resp
                     .clicked()

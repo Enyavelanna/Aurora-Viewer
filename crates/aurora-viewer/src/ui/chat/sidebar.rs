@@ -430,6 +430,7 @@ pub(super) fn show(
                     in_call: false,
                     flash: 0.0,
                     popped: false,
+                    offset: egui::Vec2::ZERO,
                 };
                 if entry(ui, p, &e, rail, entry_id(Pinned::Combat)).resp.clicked() {
                     st.combat_selected = true;
