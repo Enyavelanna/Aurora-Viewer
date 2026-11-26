@@ -87,8 +87,6 @@ enum ChatField {
 #[derive(Default)]
 pub struct ChatUi {
     pub(crate) combat: crate::combat::State,
-    pub(crate) combat_journal_enabled: bool,
-    pub(crate) combat_selected: bool,
     pub input: String,
     pub focus_request: bool,
     /// `start_gesture` resumes a nonempty draft at its existing caret.
@@ -506,7 +504,6 @@ impl ChatUi {
 
     /// Show a conversation, its entry brought into the view of the list.
     pub fn open(&mut self, conversation: uuid::Uuid) {
-        self.combat_selected = false;
         self.selected = Some(conversation);
         self.reveal = Some(conversation);
         self.show_profile = false;
@@ -847,7 +844,6 @@ impl ChatUi {
     /// Show a tab of the window and give its field the keyboard; a
     /// conversation in its own window raises that window instead.
     fn select_tab(&mut self, conversation: Option<uuid::Uuid>) {
-        self.combat_selected = false;
         if self.popped.raise(conversation, true) {
             return;
         }
@@ -3795,12 +3791,6 @@ pub(crate) fn default_rect(work: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_size(work.right_bottom() - egui::Vec2::splat(gap) - size, size)
 }
 
-fn combat_pane(ui: &mut egui::Ui, p: &Palette, world: &World, st: &mut ChatUi) {
-    if st.combat_journal_enabled {
-        crate::combat::ui::journal(ui, p, world, &mut st.combat);
-    }
-}
-
 /// Conversations floater (FSFloaterIMContainer): the tabs on the left
 /// (Contacts, nearby chat, sessions); on the right the contacts, or the
 /// toolbar, grouped messages and input (with emoji picker).
@@ -3876,13 +3866,8 @@ pub fn show(
     let entries: Vec<Option<uuid::Uuid>> = std::iter::once(None)
         .chain(st.reorder.sessions(world).into_iter().map(|(id, _)| Some(id)))
         .collect();
-    if !st.combat_journal_enabled && st.combat_selected {
-        st.combat_selected = false;
-        st.contacts = false;
-        st.selected = None;
-    }
     let select_main = |st: &mut ChatUi, open: &mut bool| {
-        if st.contacts || st.combat_selected {
+        if st.contacts {
             return;
         }
         match popout::main_selection(&st.popped, st.selected, &entries) {
@@ -3928,7 +3913,7 @@ pub fn show(
     if st.contacts {
         // the tear-off button of the multi-floater, for the Contacts tab
         floater = floater.action("external-link", aurora_i18n::tr!("common-detach"), &mut tear_off);
-    } else if !st.combat_selected {
+    } else {
         // Nearby chat can detach even before any IM opens (#995), as
         // can_tear_off in floater_fs_nearby_chat.xml does.
         floater = floater.action("external-link", aurora_i18n::tr!("common-detach"), &mut detach);
@@ -4005,10 +3990,9 @@ pub fn show(
                     .clicked()
                 {
                     st.contacts = true;
-                    st.combat_selected = false;
                 }
                 if !st.popped.contains(None) {
-                    let local_shown = st.selected.is_none() && !st.contacts && !st.combat_selected;
+                    let local_shown = st.selected.is_none() && !st.contacts;
                     let local = list_entry(
                         ui,
                         p,
@@ -4035,26 +4019,6 @@ pub fn show(
                         st.select_tab(None);
                     }
                 }
-                if st.combat_journal_enabled
-                    && list_entry(
-                        ui,
-                        p,
-                        aurora_i18n::tr!("combat-title"),
-                        None,
-                        None,
-                        st.combat_selected,
-                        0,
-                        None,
-                        0.0,
-                        false,
-                        egui::Vec2::ZERO,
-                    )
-                    .resp
-                    .clicked()
-                {
-                    st.combat_selected = true;
-                    st.contacts = false;
-                }
                 let sessions = st.reorder.sessions(world);
                 // The conversations scroll under the pinned entries above, which
                 // stay in reach (the vertical tabs of FSFloaterIMContainer
@@ -4070,7 +4034,7 @@ pub fn show(
                         if st.popped.contains(Some(other)) {
                             continue;
                         }
-                        let shown = st.selected == Some(other) && !st.contacts && !st.combat_selected;
+                        let shown = st.selected == Some(other) && !st.contacts;
                         let (flash, moving) = st.flashes.wash(other, if shown { 0 } else { unread }, now, st.flash_unread);
                         if moving {
                             ui.ctx().request_repaint();
@@ -4131,10 +4095,6 @@ pub fn show(
                     }
                 });
             });
-            if st.combat_selected {
-                ui.vertical(|ui| combat_pane(ui, p, world, st));
-                return;
-            }
             if st.contacts {
                 ui.vertical(|ui| {
                     ui.set_min_height(h);
@@ -4585,7 +4545,7 @@ pub fn local_chat_shown(ctx: &egui::Context, st: &ChatUi) -> bool {
     let minimized = ctx
         .data_mut(|d| d.get_persisted::<bool>(egui::Id::unique(("conversations", "minimized"))))
         .unwrap_or(false);
-    (!st.combat_selected && !st.contacts && st.selected.is_none() && !minimized) || popout::in_sight(ctx, &st.popped).any(|c| c.is_none())
+    (!st.contacts && st.selected.is_none() && !minimized) || popout::in_sight(ctx, &st.popped).any(|c| c.is_none())
 }
 
 /// The nearby history hides the overlay independently of its container
@@ -4609,7 +4569,7 @@ pub fn demo_place_window(ctx: &egui::Context, conversation: Option<uuid::Uuid>, 
 /// a torn-off floater is visible on its own).
 pub fn conversations_in_sight(ctx: &egui::Context, st: &ChatUi, main_open: bool) -> Vec<Option<uuid::Uuid>> {
     let minimized = super::widgets::floater_minimized(ctx, "conversations");
-    let main = (main_open && !minimized && !st.combat_selected).then_some(st.selected);
+    let main = (main_open && !minimized).then_some(st.selected);
     main.into_iter().chain(popout::in_sight(ctx, &st.popped)).collect()
 }
 

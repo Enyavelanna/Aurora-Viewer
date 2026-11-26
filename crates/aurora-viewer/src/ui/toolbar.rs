@@ -320,6 +320,8 @@ pub struct ToolbarUi {
     pub photo_roll_active: bool,
     /// Gaming mode is on (app/gaming_mode.rs).
     pub gaming_mode_active: bool,
+    /// Combat mode is on (the Combat window's master switch).
+    pub combat_mode_active: bool,
     /// The nearby chat bar is shown (MainChatbarVisible).
     pub chat_bar_active: bool,
     /// The windows the app opens itself, for their buttons' highlight.

@@ -214,7 +214,6 @@ fn new_conversation(ui: &mut egui::Ui, p: &Palette, world: &World, st: &mut Chat
 pub(super) enum Pinned {
     Contacts,
     Local,
-    Combat,
     Conversation(Uuid),
 }
 
@@ -387,13 +386,12 @@ pub(super) fn show(
                 if picked.resp.clicked() {
                     contacts_clicked = true;
                     st.contacts = true;
-                    st.combat_selected = false;
                     st.show_profile = false;
                 }
             }
             let local = aurora_i18n::tr!("common-nearby-chat");
             if !st.popped.contains(None) && matches(local) {
-                let shown = st.selected.is_none() && !st.contacts && !st.combat_selected;
+                let shown = st.selected.is_none() && !st.contacts;
                 let e = Entry {
                     icon: Icon::Glyph("map-pin-filled", p.teal),
                     name: local,
@@ -419,27 +417,6 @@ pub(super) fn show(
                 }
                 if picked.resp.clicked() {
                     st.select_tab(None);
-                }
-            }
-            if st.combat_journal_enabled && matches(aurora_i18n::tr!("combat-title")) {
-                let e = Entry {
-                    icon: Icon::Glyph("swords", p.rose),
-                    name_color: None,
-                    name: aurora_i18n::tr!("combat-title"),
-                    sub: None,
-                    sub_icon: None,
-                    current: st.combat_selected,
-                    unread: 0,
-                    close: None,
-                    ringing: false,
-                    in_call: false,
-                    flash: 0.0,
-                    popped: false,
-                    offset: egui::Vec2::ZERO,
-                };
-                if entry(ui, p, &e, rail, entry_id(Pinned::Combat)).resp.clicked() {
-                    st.combat_selected = true;
-                    st.contacts = false;
                 }
             }
             let reveal = st.reveal;
@@ -468,7 +445,7 @@ pub(super) fn show(
                     if kind == Kind::Private {
                         st.wanted_pics.insert(id);
                     }
-                    let current = st.selected == Some(id) && !st.contacts && !st.combat_selected;
+                    let current = st.selected == Some(id) && !st.contacts;
                     let status = presence::of(world, &id);
                     let insignia = if kind == Kind::Group { group_insignia(world, &id) } else { None };
                     if let Some(i) = insignia {

@@ -18,13 +18,10 @@ pub(crate) struct Journal {
     sent: usize,
     pub written: usize,
     thread: Option<std::thread::JoinHandle<()>>,
-    clearing: Option<usize>,
-    archive: Option<Receiver<Result<(), String>>>,
-    pub cleared: Option<usize>,
 }
 impl Journal {
     pub fn open(&mut self, folder: &Path) {
-        if self.worker.is_some() || self.error.is_some() || self.clearing.is_some() {
+        if self.worker.is_some() || self.error.is_some() {
             return;
         }
         let path = folder.join(format!(
@@ -72,18 +69,6 @@ impl Journal {
             Err(e) => self.error = Some(e.to_string()),
         }
     }
-    pub fn request_clear(&mut self, count: usize) {
-        if self.clearing.is_none() && self.error.is_none() {
-            if self.worker.is_none() {
-                self.cleared = Some(count);
-            } else {
-                self.clearing = Some(count);
-            }
-        }
-    }
-    pub fn clearing(&self) -> bool {
-        self.clearing.is_some()
-    }
     pub fn flush(&mut self, rows: &[RecordedEvent]) {
         if self.worker.is_none() {
             return;
@@ -102,21 +87,6 @@ impl Journal {
         }
     }
     pub fn poll(&mut self, rows: &[RecordedEvent]) {
-        if let Some(result) = self.archive.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            self.archive = None;
-            let count = self.clearing.take().unwrap_or(0);
-            match result {
-                Ok(()) => {
-                    self.cleared = Some(count);
-                    self.path = None;
-                    self.sent = 0;
-                    self.written = 0;
-                    self.replies = None;
-                }
-                Err(error) => self.error = Some(error),
-            }
-            return;
-        }
         if let Some(rx) = &self.replies {
             for reply in rx.try_iter() {
                 match reply {
@@ -128,43 +98,11 @@ impl Journal {
         if self.error.is_some() {
             return;
         }
-        if self.clearing.is_some_and(|count| self.written >= count) && self.archive.is_none() {
-            let Some(path) = self.path.clone() else {
-                return;
-            };
-            self.worker.take();
-            let thread = self.thread.take();
-            let (tx, rx) = crossbeam_channel::bounded(1);
-            self.archive = Some(rx);
-            match std::thread::Builder::new().name("combat-journal-trash".into()).spawn(move || {
-                let result = (|| -> Result<(), String> {
-                    if let Some(thread) = thread {
-                        thread.join().map_err(|_| "journal writer panicked")?;
-                    }
-                    let trash = path.parent().ok_or("missing journal folder")?.join("trash");
-                    std::fs::create_dir_all(&trash).map_err(|e| e.to_string())?;
-                    let name = path.file_name().ok_or("missing journal name")?;
-                    std::fs::rename(&path, trash.join(name)).map_err(|e| e.to_string())
-                })();
-                let _ = tx.send(result);
-            }) {
-                Ok(_) => {}
-                Err(e) => {
-                    self.error = Some(e.to_string());
-                    self.archive = None;
-                    self.clearing = None;
-                }
-            }
-            return;
-        }
         let Some(tx) = &self.worker else {
             return;
         };
         // Bound serialization work per frame even when recovering a large backlog.
         for _ in 0..64 {
-            if self.clearing.is_some_and(|count| self.sent >= count) {
-                break;
-            }
             let Some(row) = rows.get(self.sent) else {
                 break;
             };
@@ -224,39 +162,6 @@ mod tests {
         let text = std::fs::read_to_string(journal.path.as_ref().expect("path")).expect("journal");
         assert_eq!(text.lines().count(), rows.len());
         assert!(text.lines().all(|s| serde_json::from_str::<RecordedEvent>(s).is_ok()));
-        let path = journal.path.clone().expect("path");
-        journal.request_clear(rows.len());
-        let limit = Instant::now() + Duration::from_secs(10);
-        while journal.cleared.is_none() && journal.error.is_none() && Instant::now() < limit {
-            journal.poll(&rows);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(journal.error.is_none(), "{:?}", journal.error);
-        assert_eq!(journal.cleared.take(), Some(rows.len()));
-        assert!(!path.exists());
-        assert_eq!(
-            std::fs::read_to_string(dir.join("trash").join(path.file_name().expect("name"))).expect("recoverable"),
-            text
-        );
-        journal.open(&dir);
-        journal.flush(&rows[..1]);
-        assert_eq!(journal.written, 1);
-        // A trash path that is a file must preserve the original journal.
-        let second_dir = dir.join("blocked-trash");
-        std::fs::create_dir_all(&second_dir).expect("folder");
-        std::fs::write(second_dir.join("trash"), b"blocked").expect("blocker");
-        let mut blocked = Journal::default();
-        blocked.open(&second_dir);
-        blocked.flush(&rows[..1]);
-        blocked.request_clear(1);
-        let limit = Instant::now() + Duration::from_secs(10);
-        while blocked.error.is_none() && Instant::now() < limit {
-            blocked.poll(&rows[..1]);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(blocked.error.is_some());
-        assert!(blocked.cleared.is_none());
-        assert!(blocked.path.as_ref().expect("preserved path").exists());
     }
     #[test]
     fn combat_journal_disk_failure_is_observable_and_retains_session_rows() {

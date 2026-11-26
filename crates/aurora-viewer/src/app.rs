@@ -10896,7 +10896,6 @@ impl App {
                     egui::pos2(16.0, (rect.bottom() - 364.0).max(80.0)),
                     egui::vec2(760.0, 300.0),
                 );
-                self.chat_ui.combat_selected = true;
                 let workspace_demo = navigation_demo
                     || std::env::var("AURORA_DEMO_COMBAT")
                         .is_ok_and(|value| matches!(value.as_str(), "workspace" | "callouts" | "allies" | "feed" | "feed-cards"));
@@ -11129,12 +11128,6 @@ impl App {
             self.chat_ui.combat.journal.open(&folder.join("combat"));
         }
         self.chat_ui.combat.journal.poll(&self.chat_ui.combat.history);
-        if let Some(count) = self.chat_ui.combat.journal.cleared.take() {
-            let state = &mut self.chat_ui.combat;
-            let count = count.min(state.history.len());
-            state.history.drain(..count);
-            state.personal = state.personal.iter().filter_map(|i| i.checked_sub(count)).collect();
-        }
         if self.chat_ui.combat.journal.error.is_some() && !self.chat_ui.combat.journal.warned {
             self.chat_ui.combat.journal.warned = true;
             self.world.system_message(aurora_i18n::tr!("combat-journal-error"));
@@ -16916,6 +16909,10 @@ impl App {
             }
             BarAction::ToggleImmersive => self.toggle_immersive(),
             BarAction::ToggleGamingMode => self.toggle_gaming_mode(),
+            BarAction::ToggleCombatMode => {
+                self.settings.combat.enabled = !self.settings.combat.enabled;
+                self.settings.save();
+            }
             BarAction::ImmersiveHuds(visible) => self.set_immersive_huds(visible),
             BarAction::HoverTips(menu) => {
                 let tips = &mut self.settings.hover_tips;
@@ -20075,7 +20072,6 @@ impl App {
                 });
                 let mut contacts_people = Vec::new();
                 let mut snoozes = Vec::new();
-                self.chat_ui.combat_journal_enabled = self.settings.combat.show_tab;
                 let conversation_actions = ui::chat::show(
                     &ctx,
                     &p,
@@ -21222,6 +21218,7 @@ impl App {
                 self.toolbar_ui.photo_roll_empty = self.snapshots.reel.reel.is_empty();
                 self.toolbar_ui.photo_roll_active = self.snapshots.reel.quick.is_open();
                 self.toolbar_ui.gaming_mode_active = self.gaming_mode.on;
+                self.toolbar_ui.combat_mode_active = self.settings.combat.enabled;
                 self.toolbar_ui.shown = ui::toolbar::Shown {
                     profile: self.profile_ui.mine_shown(self.world.agent_id),
                     build: self.build.open,

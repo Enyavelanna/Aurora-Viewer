@@ -79,10 +79,7 @@ Mark contacts, objectives, and regroup points without leaving mouselook. The pin
 - **Kill feed styles** — Compact or cards, filtered to everyone, only you, or your allies and you. Allies are coloured, friendly fire is flagged, and a test mode lets you drag the feed anywhere.
 
 ### Combat Log
-- **Dedicated Combat Tab** in Conversations.
-- **All / Mine filters** for combat events.
 - **Optional JSONL logging** for session history.
-- **Fight recaps** — kills, deaths, best streak and medals once a fight is over.
 
 ### Tactical Pings
 

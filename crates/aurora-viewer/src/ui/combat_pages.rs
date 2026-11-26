@@ -112,10 +112,9 @@ fn tools_off(s: &Settings) -> bool {
 
 /// The switches the overview draws, in its order: its count says how many
 /// of these are on, so it never disagrees with what is under it.
-fn overview_switches(c: &crate::combat::Settings, t: &Tactical) -> [bool; 11] {
+fn overview_switches(c: &crate::combat::Settings, t: &Tactical) -> [bool; 10] {
     [
         c.journal,
-        c.show_tab,
         c.feed,
         c.killmarker,
         c.kill_sound,
@@ -145,7 +144,6 @@ fn overview(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings) -> b
         |ui, (s, changed)| {
             Card::new("bolt-filled", tr!("combat-page-feedback")).show(ui, p, |ui| {
                 **changed |= switch_row(ui, p, &mut s.combat.journal, tr!("combat-journal"), "");
-                **changed |= switch_row(ui, p, &mut s.combat.show_tab, tr!("combat-show-tab"), "");
                 **changed |= switch_row(ui, p, &mut s.combat.feed, tr!("combat-feed"), "");
                 **changed |= switch_row(ui, p, &mut s.combat.killmarker, tr!("combat-killmarker"), "");
                 **changed |= switch_row(ui, p, &mut s.combat.kill_sound, tr!("combat-kill-sound"), "");
@@ -201,14 +199,13 @@ fn feedback(ui: &mut egui::Ui, p: &Palette, s: &mut Settings, d: &Settings, r: &
             let c = &mut s.combat;
             let dc = &d.combat;
             if Card::new("history", tr!("combat-journal-title"))
-                .modified(c.journal != dc.journal || c.show_tab != dc.show_tab)
+                .modified(c.journal != dc.journal)
                 .show(ui, p, |ui| {
                     **changed |= switch_row(ui, p, &mut c.journal, tr!("combat-journal"), "");
-                    **changed |= switch_row(ui, p, &mut c.show_tab, tr!("combat-show-tab"), "");
                 })
             {
                 before_combat(&mut s.maps.tactical, c, tr!("combat-journal-title"));
-                (c.journal, c.show_tab) = (dc.journal, dc.show_tab);
+                c.journal = dc.journal;
                 **changed = true;
             }
             gap(ui);
@@ -671,12 +668,8 @@ mod tests {
     #[test]
     fn the_overview_counts_every_switch_it_draws() {
         let on = |s: &Settings| overview_switches(&s.combat, &s.maps.tactical).iter().filter(|v| **v).count();
-        // the two the count used to leave out
+        // the one the count used to leave out
         let mut s = Settings::default();
-        s.combat.show_tab = true;
-        let with = on(&s);
-        s.combat.show_tab = false;
-        assert_eq!(with, on(&s) + 1, "the Combat tab in Conversations counts");
         s.maps.tactical.tools_enabled = true;
         let with = on(&s);
         s.maps.tactical.tools_enabled = false;

@@ -24,7 +24,6 @@ pub(crate) mod wire;
 pub(crate) struct Settings {
     pub enabled: bool,
     pub journal: bool,
-    pub show_tab: bool,
     #[serde(alias = "hitmarker")]
     pub killmarker: bool,
     pub kill_sound: bool,
@@ -97,7 +96,6 @@ impl Default for Settings {
         Self {
             enabled: true,
             journal: false,
-            show_tab: true,
             killmarker: false,
             kill_sound: false,
             kill_asset: String::new(),
@@ -283,46 +281,15 @@ pub(crate) struct MedalView {
     pub alpha: f32,
     pub reveal: f32,
 }
-/// Your fights: a run of kills and deaths with no more than a minute
-/// between two of them.
-const FIGHT_GAP_SECONDS: u64 = 60;
-const RECAPS: usize = 20;
-struct Fight {
-    started: String,
-    first: Instant,
-    last: Instant,
-    kills: u32,
-    deaths: u32,
-    best_streak: u64,
-    medals: std::collections::BTreeMap<awards::Award, u32>,
-}
-/// What the lists (the killfeed, the journal) need of the settings.
+/// What the kill feed needs of the settings.
 #[derive(Default)]
 pub(crate) struct Display {
     pub medals: bool,
-    names: Vec<String>,
-}
-impl Display {
-    pub fn name(&self, award: awards::Award) -> &str {
-        self.names.get(award.slot()).map_or_else(|| award.label(), String::as_str)
-    }
-}
-/// A finished fight, for the journal.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Recap {
-    pub timestamp: String,
-    pub seconds: u64,
-    pub kills: u32,
-    pub deaths: u32,
-    pub best_streak: u64,
-    pub medals: Vec<(awards::Award, u32)>,
 }
 #[derive(Default)]
 pub(crate) struct State {
     pub history: Vec<RecordedEvent>,
-    pub personal: Vec<usize>,
     pub feed: VecDeque<RecordedEvent>,
-    pub personal_view: bool,
     pub last_kill: Option<Instant>,
     pub awards: awards::Tracker,
     /// The streaks and rivalries of everyone else.
@@ -335,28 +302,18 @@ pub(crate) struct State {
     pub journal: journal::Journal,
     pub received: u64,
     pub lost: u64,
-    fight: Option<Fight>,
-    pub recaps: Vec<Recap>,
     pub display: Display,
 }
 impl State {
-    /// Keeps the names and the switch the lists use up to date.
+    /// Keeps the switch the kill feed uses up to date.
     pub fn sync_display(&mut self, cfg: &Settings) {
         self.display.medals = cfg.feed_medals;
-        let same = self.display.names.len() == awards::Award::ALL.len()
-            && awards::Award::ALL
-                .iter()
-                .all(|a| self.display.names[a.slot()] == cfg.medal_name(*a));
-        if !same {
-            self.display.names = awards::Award::ALL.iter().map(|a| cfg.medal_name(*a).to_owned()).collect();
-        }
     }
     pub fn record(&mut self, event: Event, agent: Uuid, cfg: &Settings, now: Instant) {
         if !cfg.enabled {
             return;
         }
         self.received += 1;
-        self.close_fight(now);
         let outcome = event.outcome(agent);
         if event.own_kill(agent) {
             self.last_kill = Some(now);
@@ -418,7 +375,6 @@ impl State {
                 });
             }
         }
-        self.note_fight(outcome, &earned, now);
         let row = RecordedEvent {
             at: now,
             timestamp: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -433,56 +389,7 @@ impl State {
         }
         self.feed.push_back(row.clone());
         if cfg.journal {
-            if outcome != Outcome::Observed {
-                self.personal.push(self.history.len());
-            }
             self.history.push(row);
-        }
-    }
-    /// Your kills and deaths, grouped into fights.
-    fn note_fight(&mut self, outcome: Outcome, earned: &[awards::Award], now: Instant) {
-        if matches!(outcome, Outcome::Observed) {
-            return;
-        }
-        let fight = self.fight.get_or_insert_with(|| Fight {
-            started: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-            first: now,
-            last: now,
-            kills: 0,
-            deaths: 0,
-            best_streak: 0,
-            medals: std::collections::BTreeMap::new(),
-        });
-        fight.last = now;
-        if outcome == Outcome::Kill {
-            fight.kills += 1;
-            fight.best_streak = fight.best_streak.max(self.awards.streak());
-            for award in earned {
-                *fight.medals.entry(*award).or_default() += 1;
-            }
-        } else {
-            fight.deaths += 1;
-        }
-    }
-    /// A fight is over a minute after its last kill or death.
-    pub fn close_fight(&mut self, now: Instant) {
-        if self
-            .fight
-            .as_ref()
-            .is_some_and(|f| now.saturating_duration_since(f.last).as_secs() >= FIGHT_GAP_SECONDS)
-            && let Some(f) = self.fight.take()
-        {
-            if self.recaps.len() == RECAPS {
-                self.recaps.remove(0);
-            }
-            self.recaps.push(Recap {
-                timestamp: f.started,
-                seconds: f.last.saturating_duration_since(f.first).as_secs(),
-                kills: f.kills,
-                deaths: f.deaths,
-                best_streak: f.best_streak,
-                medals: f.medals.into_iter().rev().collect(),
-            });
         }
     }
     pub fn preview_award(&mut self, award: awards::Award, now: Instant) {
@@ -607,7 +514,6 @@ mod tests {
     fn combat_hidden_session_history_is_not_truncated() {
         let cfg = Settings {
             journal: true,
-            show_tab: false,
             ..Default::default()
         };
         let mut state = State::default();
@@ -616,7 +522,6 @@ mod tests {
             state.record(death(1, 2), me, &cfg, Instant::now());
         }
         assert_eq!(state.history.len(), 600);
-        assert_eq!(state.personal.len(), 600);
         assert_eq!(state.feed.len(), 64);
     }
     #[test]
@@ -647,7 +552,7 @@ mod tests {
     fn combat_old_settings_migrate_and_discard_hit_sounds() {
         let cfg: Settings =
             serde_json::from_str(r#"{"hitmarker":true,"hit_sound":true,"hit_asset":"old","marker_size":33,"journal":true}"#).expect("old");
-        assert!(cfg.killmarker && cfg.journal && cfg.show_tab);
+        assert!(cfg.killmarker && cfg.journal);
         assert_eq!(cfg.marker_size, 33.0);
         assert!(!cfg.voices && !cfg.medals);
         assert!(!serde_json::to_string(&cfg).expect("serialize").contains("hit_sound"));
@@ -817,26 +722,5 @@ mod tests {
         // a gap in the events forgets everyone
         state.note_loss(1);
         assert_eq!(state.roster.streak(&Uuid::from_u128(9)), 0);
-    }
-    #[test]
-    fn a_fight_ends_a_minute_after_its_last_event_and_is_recapped() {
-        let me = Uuid::from_u128(1);
-        let cfg = Settings::default();
-        let mut state = State::default();
-        let now = Instant::now();
-        state.record(death(1, 2), me, &cfg, now);
-        state.record(death(1, 3), me, &cfg, now + Duration::from_secs(2));
-        state.record(death(4, 1), me, &cfg, now + Duration::from_secs(10));
-        state.record(death(5, 6), me, &cfg, now + Duration::from_secs(20));
-        state.close_fight(now + Duration::from_secs(60));
-        assert!(state.recaps.is_empty(), "still within the minute");
-        state.close_fight(now + Duration::from_secs(70));
-        let recap = state.recaps.last().expect("recap");
-        assert_eq!((recap.kills, recap.deaths, recap.best_streak, recap.seconds), (2, 1, 2, 10));
-        assert_eq!(recap.medals, vec![(awards::Award::Double, 1)]);
-        // the next event starts another fight
-        state.record(death(1, 9), me, &cfg, now + Duration::from_secs(200));
-        state.close_fight(now + Duration::from_secs(300));
-        assert_eq!(state.recaps.len(), 2);
     }
 }

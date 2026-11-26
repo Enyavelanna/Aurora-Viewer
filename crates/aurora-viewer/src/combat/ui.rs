@@ -1,122 +1,10 @@
 //! Aurora views of death confirmations; rendering never waits for name resolution.
-use super::{Display, Outcome, RecordedEvent, Settings, State};
+use super::{Settings, State};
 use crate::{theme::Palette, world::World};
 use aurora_i18n::tr;
 use egui::{Align2, Stroke, vec2};
 use std::{collections::HashMap, time::Instant};
 use uuid::Uuid;
-pub(crate) fn line(row: &RecordedEvent, world: &World, display: &Display) -> String {
-    let e = &row.event;
-    let victim = world.social.display_name_of(&e.target);
-    let outcome = if e.actor == e.target {
-        Outcome::Suicide
-    } else if e.actor.is_nil() {
-        Outcome::Environment
-    } else {
-        e.outcome(world.agent_id)
-    };
-    let mut text = match outcome {
-        Outcome::Suicide => format!("{victim} · {}", tr!("combat-suicide")),
-        Outcome::Environment => format!("{victim} · {}", tr!("combat-environment")),
-        _ => format!("{} {} → {victim}", world.social.display_name_of(&e.actor), tr!("combat-kill")),
-    };
-    if let Some(t) = e.damage_type {
-        text.push_str(&format!("  [{t}]"));
-    }
-    if let Some(w) = &e.weapon {
-        text.push_str(&format!("  {w}"));
-    }
-    if display.medals && !row.awards.is_empty() {
-        let names: Vec<&str> = row.awards.iter().map(|a| display.name(*a)).collect();
-        text.push_str(&format!("  ·  {}", names.join(", ")));
-    }
-    text
-}
-/// The fights that are over, newest first.
-fn recaps(ui: &mut egui::Ui, p: &Palette, state: &State) {
-    if state.recaps.is_empty() {
-        return;
-    }
-    crate::ui::widgets::collapsing(ui, p, "combat-recaps", tr!("combat-recaps"), false, |ui| {
-        for recap in state.recaps.iter().rev() {
-            let mut text = format!(
-                "[{}] {}",
-                recap.timestamp,
-                tr!(
-                    "combat-recap-line",
-                    kills = recap.kills.to_string(),
-                    deaths = recap.deaths.to_string(),
-                    streak = recap.best_streak.to_string(),
-                    seconds = recap.seconds.to_string()
-                )
-            );
-            if !recap.medals.is_empty() {
-                let medals: Vec<String> = recap
-                    .medals
-                    .iter()
-                    .map(|(award, n)| format!("{} ×{n}", state.display.name(*award)))
-                    .collect();
-                text.push_str(&format!("  ·  {}", medals.join(", ")));
-            }
-            ui.add(egui::Label::new(text).wrap());
-        }
-    });
-}
-pub(crate) fn journal(ui: &mut egui::Ui, p: &Palette, world: &World, state: &mut State) {
-    recaps(ui, p, state);
-    ui.horizontal(|ui| {
-        let mut view = usize::from(state.personal_view);
-        if crate::ui::widgets::segmented(ui, p, &mut view, &[(tr!("combat-global"), false), (tr!("combat-personal"), false)]) {
-            state.personal_view = view == 1;
-        }
-        if crate::ui::widgets::action_button_if(
-            ui,
-            p,
-            "trash-filled",
-            tr!("combat-clear-journal"),
-            crate::ui::widgets::ActionKind::Flat,
-            vec2(0.0, 26.0),
-            !state.journal.clearing(),
-        )
-        .clicked()
-        {
-            state.journal.request_clear(state.history.len());
-        }
-    });
-    ui.label(tr!(
-        "combat-status",
-        received = state.received,
-        recorded = state.history.len() as u64,
-        saved = state.journal.written as u64,
-        lost = state.lost
-    ));
-    if let Some(error) = &state.journal.error {
-        ui.label(tr!("combat-journal-error"));
-        ui.label(error);
-    }
-    let count = if state.personal_view {
-        state.personal.len()
-    } else {
-        state.history.len()
-    };
-    let height = ui.text_style_height(&egui::TextStyle::Body).max(20.0);
-    egui::ScrollArea::vertical()
-        .id_salt("combat-deaths")
-        .stick_to_bottom(true)
-        .show_rows(ui, height, count, |ui, range| {
-            for index in range {
-                let index = if state.personal_view { state.personal[index] } else { index };
-                if let Some(row) = state.history.get(index) {
-                    let text = format!("[{}] {}", row.timestamp, line(row, world, &state.display));
-                    ui.add_sized(
-                        [ui.available_width(), height],
-                        egui::Label::new(&text).halign(egui::Align::Min).truncate(),
-                    )
-                    .on_hover_text(text);
-                }
-            }
-        });
-}
 /// The kill feed and the medal banner over the world. True when a saved
 /// setting changed (the feed dragged to a new place).
 pub(crate) fn overlays(
@@ -132,7 +20,6 @@ pub(crate) fn overlays(
     let mut changed = false;
     let now = Instant::now();
     state.sync_display(cfg);
-    state.close_fight(now);
     if !cfg.enabled {
         return false;
     }

@@ -94,6 +94,8 @@ pub enum BarAction {
     Photo360,
     /// The toolbar's Gaming mode, on or off (app/gaming_mode.rs).
     ToggleGamingMode,
+    /// The toolbar's Combat mode: the Combat window's master switch.
+    ToggleCombatMode,
     /// Our profile on its Picks tab, or closed when Picks is shown
     /// (Avatar.TogglePicks, llviewermenu.cpp).
     MyPicks,
@@ -2838,6 +2840,7 @@ pub fn run_command(ctx: &egui::Context, cmd: &str, panels: &mut Panels) -> BarAc
         "avatar_align" => toggle(super::avatar_align::window(panels.avatar_align_mini), &mut panels.avatar_align),
         "face_nearest_avatar" => return BarAction::FaceNearestAvatar,
         "gaming_mode" => return BarAction::ToggleGamingMode,
+        "combat_mode" => return BarAction::ToggleCombatMode,
         _ => {}
     }
     BarAction::None
@@ -3626,6 +3629,8 @@ pub(crate) fn toolbar_row(
             toolbar.photo_roll_active
         } else if b.command == "gaming_mode" {
             toolbar.gaming_mode_active
+        } else if b.command == "combat_mode" {
+            toolbar.combat_mode_active
         } else if b.command == "defaultchatbar" {
             toolbar.chat_bar_active
         } else if b.command == "name_tags" {
@@ -4636,6 +4641,9 @@ mod tests {
         assert!(!panels.web_browser);
         assert!(super::super::toolbar::ready("RFO"));
         assert!(matches!(run_command(&ctx, "RFO", &mut panels), BarAction::ToggleFriendsOnly));
+        // Combat mode's button: the Combat window's master switch
+        assert!(super::super::toolbar::ready("combat_mode"));
+        assert!(matches!(run_command(&ctx, "combat_mode", &mut panels), BarAction::ToggleCombatMode));
         // World › Hide name tags' button
         assert!(super::super::toolbar::ready("name_tags"));
         assert!(matches!(run_command(&ctx, "name_tags", &mut panels), BarAction::ToggleNameTags));

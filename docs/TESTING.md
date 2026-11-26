@@ -50,12 +50,12 @@ four directional guides should be visible, with help/contact taking priority.
 
 With `AURORA_DEMO=1`, enable the journal, kill confirmation marker, medal display,
 screen feed and tactical map in memory. No grid login or scripted upload is
-performed. Inspect the All/Mine combat log and French, English and Japanese
+performed. Inspect the French, English and Japanese
 labels. Me > Advanced > Combat holds every switch and configuration;
 `AURORA_DEMO_OPTIONS=combat` opens the overview. Suffixes /1 through /7 select
 Feedback, Awards, Mini-map, Marker sets, Pings, Sharing and Allies respectively.
 `AURORA_DEMO_COMBAT=allies` with `AURORA_DEMO_OPTIONS=combat/7` shows the Allies tab:
-ticked residents, the group title list, and the allies drawn in their own colour and ring on the mini-map. The Combat toolbar button (command `combat`) opens and closes the window.
+ticked residents, the group title list, and the allies drawn in their own colour and ring on the mini-map. The Combat toolbar button (command `combat`) opens and closes the window; the Combat mode button (command `combat_mode`) switches Combat mode on and off.
 Use `/editor` to capture the separate region canvas. Draw all four marker shapes,
 move a selection, change its properties, undo, cancel a drag with Escape, switch
 sets and verify the same annotations on the minimap. Check the medal over a bright

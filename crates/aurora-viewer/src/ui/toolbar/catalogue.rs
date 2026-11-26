@@ -49,6 +49,8 @@ pub const COMMANDS: &[Command] = commands![
     "minimap", "Command_MiniMap_Icon", "common-mini-map", true;
     "performance", "Command_Performance_Icon", "common-performance", true;
     "combat", "swords", "combat-title", true;
+    // Aurora's own: Combat mode on or off, the Combat window's master switch
+    "combat_mode", "bolt-filled", "combat-mode", true;
     "sit", "groundsit", "extra-sit-on-ground-stand-up", true;
     "ao", "AO", "ao-title", true;
     "movement", "swimming", "movement-swimming", true;
